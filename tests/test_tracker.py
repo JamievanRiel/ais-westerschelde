@@ -359,3 +359,27 @@ def test_no_crossing_after_a_stale_position():
 
 def test_without_a_gate_nothing_is_counted():
     assert crossings(tracker(), (51.42, 3.638), (51.42, 3.642)) == []
+
+
+def test_touching_the_line_and_turning_back_counts_nothing():
+    # AIS-posities zijn veelvouden van 1/600000°; 3,640° is er exact een van.
+    assert crossings(tracker(gate=GATE), (51.42, 3.642), (51.42, 3.640), (51.42, 3.642)) == []
+    assert crossings(tracker(gate=GATE), (51.42, 3.638), (51.42, 3.640), (51.42, 3.638)) == []
+
+
+def test_drifting_across_slowly_is_not_counted_later():
+    t = tracker(gate=GATE)
+    assert crossings(t, (51.42, 3.6399), (51.42, 3.6401), sog=0.3) == []
+    assert of_type(t.handle(pos(lat=51.42, lon=3.6405, sog=10.0), now=60), GateCrossing) == []
+
+
+def test_crossing_right_after_a_restart_is_counted():
+    t = tracker(gate=GATE)
+    t.restore(
+        vessels=[{"mmsi": MMSI, "ais_class": "A", "lat": 51.42, "lon": 3.638, "sog": 10.0, "cog": 90.0,
+                  "heading": 90, "nav_status": 0, "position_ts": 1000, "first_seen": 10}],
+        record=None,
+    )
+    assert of_type(t.handle(pos(lat=51.42, lon=3.642), now=1030), GateCrossing) == [
+        GateCrossing(1030, MMSI, upstream=True)
+    ]

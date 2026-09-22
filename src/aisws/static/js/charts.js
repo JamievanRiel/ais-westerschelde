@@ -89,6 +89,13 @@ function keyboard(svg, count, focus, clear, { wrap = false } = {}) {
 
 const observers = new WeakMap();
 
+/** Maakt een grafiekcontainer leeg én stopt het hertekenen bij een breedteverandering. */
+export function clearChart(container) {
+  observers.get(container)?.disconnect();
+  observers.delete(container);
+  container.replaceChildren();
+}
+
 // Tekent opnieuw bij elke breedteverandering. Een nieuwe aanroep voor dezelfde
 // container vervangt de vorige observer, zodat verversen niets laat lekken.
 function onResize(container, draw) {

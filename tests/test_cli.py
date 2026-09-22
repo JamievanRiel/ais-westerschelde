@@ -1,4 +1,5 @@
 import socket
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,18 @@ def test_serve_with_invalid_config_exits_with_a_message(tmp_path, capsys):
 def test_serve_with_missing_config_exits_with_a_message(tmp_path, capsys):
     assert main(["serve", "--config", str(tmp_path / "bestaat-niet.toml")]) == 2
     assert "bestaat-niet.toml" in capsys.readouterr().err
+
+
+def test_serve_refuses_a_database_from_a_newer_version(tmp_path, capsys):
+    # Exitcode 2, zodat systemd (RestartPreventExitStatus=2) niet eindeloos herstart.
+    db = tmp_path / "ais.db"
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA user_version = 99")
+    conn.close()
+    path = tmp_path / "config.toml"
+    path.write_text(f'[station]\nlat = 51.44\nlon = 3.58\n[storage]\ndb_path = "{db}"\n')
+    assert main(["serve", "--config", str(path)]) == 2
+    assert "nieuwere versie" in capsys.readouterr().err
 
 
 @pytest.fixture

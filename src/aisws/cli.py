@@ -59,7 +59,16 @@ def _serve(args: argparse.Namespace) -> int:
 
     import uvicorn
 
+    from aisws.store import SchemaError, Store
     from aisws.web import create_app
+
+    # De database vooraf openen (en zo nodig bijwerken): een te nieuw schema moet net als
+    # een ongeldige config exitcode 2 geven, anders herstart systemd eindeloos.
+    try:
+        Store(config.storage.db_path).close()
+    except SchemaError as exc:
+        print(exc, file=sys.stderr)
+        return 2
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     uvicorn.run(create_app(config), host=config.web.host, port=config.web.port, log_level="info")

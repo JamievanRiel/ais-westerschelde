@@ -394,7 +394,9 @@ class Store:
                 conn.execute("COMMIT")
                 conn.execute("DETACH DATABASE src")
             os.replace(tmp, target)
-            for old in sorted(p for p in directory.iterdir() if BACKUP_NAME.match(p.name))[:-keep]:
+            # De nieuwe back-up telt altijd mee, ook als er (klok verkeerd) nieuwere namen liggen.
+            others = sorted(p for p in directory.iterdir() if BACKUP_NAME.match(p.name) and p != target)
+            for old in others[: max(0, len(others) - (keep - 1))]:
                 old.unlink()
         except (OSError, sqlite3.Error) as exc:
             try:

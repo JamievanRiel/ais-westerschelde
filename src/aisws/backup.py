@@ -1,8 +1,10 @@
 """Wanneer de dagelijkse back-up draait, en hoe die ging (voor /api/health).
 
 Eén back-up per lokale dag, zodra die van vandaag ontbreekt: dus kort na
-middernacht, en direct na het opstarten als hij er nog niet is. Mislukt het
-(stick niet gekoppeld, schijf vol), dan volgt een uur later een nieuwe poging.
+middernacht, en direct na het opstarten als hij er nog niet is. Tussen twee
+pogingen zit minstens een uur, zodat een mislukte (stick niet gekoppeld, schijf
+vol) niet elke paar seconden terugkomt. Alle bestandstoegang loopt via ``tick``,
+die in een thread draait: een hangende USB-stick mag de event loop niet stilzetten.
 """
 
 import logging
@@ -11,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from aisws.store import BackupError, Store, backup_name
+from aisws.store import BACKUP_NAME, BackupError, Store, backup_name
 
 log = logging.getLogger(__name__)
 
@@ -29,14 +31,34 @@ class BackupJob:
         self._ts: int | None = None
         self._bytes: int | None = None
         self._error: str | None = None
+        self._seeded = False
 
     def _today(self, now: float) -> Path:
         return self.directory / backup_name(datetime.fromtimestamp(now, self.tz).date())
 
     def due(self, now: float) -> bool:
-        if self._error is not None and self._last_attempt is not None and now - self._last_attempt < RETRY_S:
+        if self._last_attempt is not None and now - self._last_attempt < RETRY_S:
             return False
         return not self._today(now).exists()
+
+    def tick(self, now: float) -> None:
+        """Eén stap van de opslag-taak: na een herstart de status uit de map halen,
+        daarna een back-up maken als die aan de beurt is."""
+        if not self._seeded:
+            self._seeded = True
+            self._seed()
+        if self.due(now):
+            self.run(now)
+
+    def _seed(self) -> None:
+        """De nieuwste back-up in de map geldt als laatst gelukte, ook van voor een herstart."""
+        try:
+            newest = max((p for p in self.directory.iterdir() if BACKUP_NAME.match(p.name)), default=None)
+            if newest is not None:
+                info = newest.stat()
+                self._file, self._ts, self._bytes = newest.name, int(info.st_mtime), info.st_size
+        except OSError:
+            pass  # map (nog) niet bereikbaar: run() meldt de fout
 
     def run(self, now: float) -> None:
         """Maakt de back-up van vandaag; fouten komen in ``status()`` en in het log."""

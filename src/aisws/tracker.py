@@ -108,6 +108,7 @@ class VesselState:
     last_speed_sample_ts: float | None = None
     rejections: int = 0
     live: bool = False
+    gate_side: int = 0  # kant van de doorvaartlijn: +1 links, -1 rechts, 0 onbekend
 
     def apply_static(self, values: dict[str, Any]) -> dict[str, Any]:
         changed = {}
@@ -200,6 +201,7 @@ class Tracker:
 
         state = self._state(report.mmsi, report.ais_class, now)
         previous = (state.lat, state.lon)
+        side = self._gate_side(report.lat, report.lon)
         speed_checked = False
         if state.position_ts is not None and now - state.position_ts <= cfg.stale_after_s:
             moved = haversine_m(state.lat, state.lon, report.lat, report.lon)
@@ -245,34 +247,40 @@ class Tracker:
         if speed_checked:
             sector = int(bearing_deg(*self.station, report.lat, report.lon) // SECTOR_DEG) % (360 // SECTOR_DEG)
             events.append(SectorSample(ts - ts % DAY_S, sector, state.mmsi, distance))
-            if report.sog is not None and report.sog >= cfg.moving_sog_kn:
-                upstream = self._gate_crossing(previous, (report.lat, report.lon))
-                if upstream is not None:
-                    events.append(GateCrossing(ts, state.mmsi, upstream))
+            if (
+                side and state.gate_side and side != state.gate_side
+                and report.sog is not None and report.sog >= cfg.moving_sog_kn
+                and self._through_gate(previous, (report.lat, report.lon))
+            ):
+                events.append(GateCrossing(ts, state.mmsi, upstream=side > 0))
             if self.record is None or distance > self.record.distance_m:
                 self.record = RangeRecord(ts, state.mmsi, report.lat, report.lon, distance)
                 events.append(self.record)
+        if side:
+            state.gate_side = side
         return events
 
     def _xy(self, lat: float, lon: float) -> tuple[float, float]:
         return lon * self._scale, lat
 
-    def _gate_crossing(self, before: tuple[float, float], after: tuple[float, float]) -> bool | None:
-        """True = de Schelde op (van rechts naar links over de lijn), False = af, None = niet gekruist.
+    def _gate_side(self, lat: float, lon: float) -> int:
+        """+1 links van de lijn (gezien van punt 1 naar punt 2), -1 rechts, 0 erop of geen lijn.
 
-        Een punt precies op de lijn telt als rechts, zodat een schip dat erop
-        belandt en doorvaart één keer telt.
+        Van rechts naar links is de Schelde op. Een positie precies op de lijn
+        (AIS rekent in 1/600000°, dus dat kan) verandert de onthouden kant niet:
+        een schip dat de lijn raakt en terugdraait, telt niet.
         """
         if self._gate_points is None:
-            return None
+            return 0
+        p1, p2 = self._gate_points
+        c = _cross(p1, p2, self._xy(lat, lon))
+        return (c > 0) - (c < 0)
+
+    def _through_gate(self, before: tuple[float, float], after: tuple[float, float]) -> bool:
+        """Snijdt het stuk van ``before`` naar ``after`` de lijn tussen haar eindpunten?"""
         p1, p2 = self._gate_points
         a, b = self._xy(*before), self._xy(*after)
-        left_before, left_after = _cross(p1, p2, a) > 0, _cross(p1, p2, b) > 0
-        if left_before == left_after:
-            return None
-        if _cross(a, b, p1) * _cross(a, b, p2) > 0:  # de lijn ligt helemaal naast het stuk
-            return None
-        return left_after
+        return _cross(a, b, p1) * _cross(a, b, p2) <= 0
 
     def _wants_track_point(self, state: VesselState, now: float) -> bool:
         cfg = self.config
@@ -311,6 +319,8 @@ class Tracker:
             values.setdefault("last_seen", position_ts)
             state = VesselState(**values)
             state.live = position_ts is not None
+            if state.lat is not None and state.lon is not None:
+                state.gate_side = self._gate_side(state.lat, state.lon)
             self._vessels[state.mmsi] = state
         self.record = record
 

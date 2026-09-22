@@ -89,8 +89,8 @@ def create_app(config: Config, clock: Callable[[], float] = time.time) -> FastAP
                 cutoff = int(clock()) - config.storage.positions_retention_days * 86400
                 deleted = await asyncio.to_thread(store.cleanup, cutoff)
                 log.info("%d oude posities opgeruimd", deleted)
-            if backup is not None and backup.due(clock()):
-                await asyncio.to_thread(backup.run, clock())
+            if backup is not None:
+                await asyncio.to_thread(backup.tick, clock())
 
         tasks = [
             asyncio.create_task(_every(config.web.ws_update_interval_s, live_job)),

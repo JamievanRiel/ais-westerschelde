@@ -218,9 +218,15 @@ def passages(conn: sqlite3.Connection, tz: ZoneInfo, now: int, days: int = 90) -
     today = _local_date(now, tz)
     start = _local_midnight(today - timedelta(days=days - 1), tz)
     per_day: dict[date, dict[str, int]] = {}
-    for ts, upstream in conn.execute("SELECT ts, upstream FROM gate_crossings WHERE ts >= ?", (start,)):
-        counts = per_day.setdefault(_local_date(ts, tz), {"up": 0, "down": 0})
-        counts["up" if upstream else "down"] += 1
+    # Eerst per UTC-uur tellen (hoogstens 24 × days rijen in plaats van elke kruising
+    # omrekenen): NL-offsets zijn hele uren, dus elk UTC-uur valt in één lokale dag.
+    for hour_ts, upstream, count in conn.execute(
+        """SELECT ts - ts % 3600, upstream, count(*) FROM gate_crossings
+           WHERE ts >= ? GROUP BY ts - ts % 3600, upstream""",
+        (start,),
+    ):
+        counts = per_day.setdefault(_local_date(hour_ts, tz), {"up": 0, "down": 0})
+        counts["up" if upstream else "down"] += count
 
     since = _local_midnight(today - timedelta(days=PASSAGES_BY_TYPE_DAYS - 1), tz)
     groups: dict[str, dict[str, int]] = {}

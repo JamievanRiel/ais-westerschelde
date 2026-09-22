@@ -140,3 +140,29 @@ def test_failed_backup_is_retried_an_hour_later(store, tmp_path):
 def test_existing_backup_of_today_is_not_redone_after_a_restart(store, stick):
     BackupJob(store, str(stick), keep=7, tz=TZ).run(NIGHT)
     assert not BackupJob(store, str(stick), keep=7, tz=TZ).due(NIGHT + 600)
+
+
+def test_status_is_read_from_the_directory_after_a_restart(store, stick):
+    BackupJob(store, str(stick), keep=7, tz=TZ).run(NIGHT)
+    target = stick / "ais-2026-10-01.db"
+    restarted = BackupJob(store, str(stick), keep=7, tz=TZ)
+    restarted.tick(NIGHT + 600)
+    status = restarted.status()
+    assert (status["file"], status["bytes"], status["error"]) == (target.name, target.stat().st_size, None)
+    assert status["ts"] == int(target.stat().st_mtime)
+
+
+def test_attempts_are_at_least_an_hour_apart(store, stick):
+    job = BackupJob(store, str(stick), keep=7, tz=TZ)
+    job.run(NIGHT)
+    (stick / "ais-2026-10-01.db").unlink()
+    assert not job.due(NIGHT + 60)
+    assert job.due(NIGHT + 3600)
+
+
+def test_new_backup_is_never_pruned_itself(store, stick):
+    # Bestanden uit de toekomst (klok die verkeerd stond) mogen de back-up van vandaag niet wegdrukken.
+    for day in ("2027-01-01", "2027-01-02", "2027-01-03"):
+        (stick / f"ais-{day}.db").write_bytes(b"")
+    store.backup(stick, DAY, keep=3)
+    assert sorted(os.listdir(stick)) == ["ais-2026-10-01.db", "ais-2027-01-02.db", "ais-2027-01-03.db"]

@@ -2,6 +2,7 @@
 
 import {
   barChart,
+  clearChart,
   columnChart,
   compass,
   divergingChart,
@@ -22,10 +23,20 @@ const ships = (n) => `${fmt.number(n)} ${n === 1 ? "schip" : "schepen"}`;
 const shipsAvg = (n) => `${fmt.number(n, 1)} schepen`;
 
 function empty(container, text) {
+  clearChart(container);
   const p = document.createElement("p");
   p.className = "muted";
   p.textContent = text;
   container.replaceChildren(p);
+}
+
+// Bij snel wisselen van periode kan een oud antwoord na een nieuw binnenkomen:
+// alleen het laatst gevraagde mag tekenen.
+const latest = {};
+async function fetchLatest(key, url) {
+  const ticket = (latest[key] = (latest[key] ?? 0) + 1);
+  const data = await fmt.getJson(url);
+  return ticket === latest[key] ? data : null;
 }
 
 function dataTable(headers, rows) {
@@ -217,7 +228,8 @@ function renderHeatmap(data) {
 
 async function loadSpeed(period) {
   markPressed("periods", period);
-  const rows = await fmt.getJson(`/api/stats/speed?period=${period}`);
+  const rows = await fetchLatest("speed", `/api/stats/speed?period=${period}`);
+  if (rows === null) return;
   if (!rows.length) {
     empty($("speed"), "Nog geen varende schepen gemeten in deze periode.");
     $("speed-table").replaceChildren();
@@ -383,7 +395,8 @@ function renderRange(data) {
 
 async function loadCoverage(period) {
   markPressed("coverage-periods", period);
-  const data = await fmt.getJson(`/api/stats/coverage?period=${period}`);
+  const data = await fetchLatest("coverage", `/api/stats/coverage?period=${period}`);
+  if (data === null) return;
   const direction = (s) => `${compass(s.from_deg + 5)}, ${s.from_deg}–${s.from_deg + 10}°`;
   const ship = (s) => s.name ?? `MMSI ${s.mmsi}`;
   if (!data.sectors.some((s) => s.max_km !== null)) {
