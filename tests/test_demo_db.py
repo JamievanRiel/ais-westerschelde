@@ -24,6 +24,10 @@ def test_demo_db_fills_every_statistic(tmp_path):
         assert {"cargo", "tanker", "pilot", "pleasure"} <= groups
         assert stats.largest(conn, TZ, END)["current"]["length"] > 100
         assert stats.range_records(conn)["record"]["distance_km"] > 30
+        passages = stats.passages(conn, TZ, END, days=2)
+        assert sum(day["up"] for day in passages["days"]) > 20
+        assert sum(day["down"] for day in passages["days"]) > 20
+        assert sum(s["max_km"] is not None for s in stats.coverage(conn, END, "7d")) > 10
         names = [name for (name,) in conn.execute("SELECT name FROM vessels")]
         assert len(names) == len(set(names))
     finally:

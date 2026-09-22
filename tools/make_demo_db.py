@@ -3,8 +3,8 @@
 Het voorbeeldbestand (``make_sample.py``) is een kwartier verkeer: genoeg voor de
 kaart, te weinig voor statistieken per dag of per week. Dit script laat
 ``--days`` dagen verzonnen verkeer door de echte tracker en opslag lopen, met een
-dag-, week- en seizoenspatroon, dagen met overbereik voor het afstandsrecord en
-af en toe een heel groot schip:
+dag-, week- en seizoenspatroon, dagen met overbereik voor het afstandsrecord,
+af en toe een heel groot schip en doorvaarten langs de standaardlijn bij Vlissingen:
 
     python tools/make_demo_db.py demo.db
     # config.toml: [storage] db_path = "demo.db"
@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 
 from make_sample import FAIRWAY, _along, _dist_m
 
-from aisws.config import TrackerConfig
+from aisws.config import GateConfig, TrackerConfig
 from aisws.geo import haversine_m
 from aisws.messages import PositionReport, StaticData
 from aisws.store import Store
@@ -300,7 +300,7 @@ def generate(path: Path, days: int = 90, lat: float = 51.443, lon: float = 3.570
         reach_km[d] = rng.uniform(70, 125)
 
     store = Store(path, max_pending_writes=10**9)
-    tracker = Tracker(TrackerConfig(), lat, lon, static_lookup=store.lookup_static)
+    tracker = Tracker(TrackerConfig(), lat, lon, static_lookup=store.lookup_static, gate=GateConfig())
     heard, next_flush = 0, start + HOUR
     # Naam en afmetingen pas doorgeven als het station het schip ook hoort.
     waiting: dict[int, StaticData] = {}
