@@ -173,5 +173,7 @@ def range_records(conn: sqlite3.Connection) -> dict[str, Any]:
         }
         for ts, mmsi, lat, lon, distance, name, ship_type in rows
     ]
-    record = max(history, key=lambda r: r["distance_km"], default=None)
+    # Kiezen op de onafgeronde afstand: afgerond zijn twee records binnen 10 m gelijk.
+    distances = [row[4] for row in rows]
+    record = history[distances.index(max(distances))] if rows else None
     return {"record": record, "history": history}

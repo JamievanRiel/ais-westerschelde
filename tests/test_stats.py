@@ -167,6 +167,13 @@ def test_range_record_and_history(db):
     assert [r["mmsi"] for r in result["history"]] == [8, 7]
 
 
+def test_range_record_is_chosen_before_rounding(db):
+    # 111,7252 en 111,7346 km zijn afgerond allebei 111,73; het nieuwste record is het verste.
+    db.record(100, 8, 51.3, 1.99, 111_725.2)
+    db.record(200, 7, 51.3, 1.98, 111_734.6)
+    assert stats.range_records(db.reader)["record"]["mmsi"] == 7
+
+
 def test_no_range_record_yet(db):
     assert stats.range_records(db.reader) == {"record": None, "history": []}
 
