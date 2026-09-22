@@ -1,0 +1,21 @@
+[Unit]
+Description=aisws — AIS-decoder, live kaart en statistieken
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aisws
+ExecStart=/opt/aisws/venv/bin/aisws serve --config /etc/aisws/config.toml
+Restart=always
+RestartSec=5
+# Exitcode 2 = ongeldige configuratie: niet eindeloos herstarten, eerst de config fixen.
+RestartPreventExitStatus=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/aisws
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

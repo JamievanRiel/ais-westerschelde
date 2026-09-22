@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Westerschelde in cijfers</title>
+  <meta name="description" content="Statistieken van de scheepvaart op de Westerschelde, gemeten met een eigen AIS-station.">
+  <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script type="module" src="/static/js/stats.js"></script>
+</head>
+<body>
+  <main class="stats-page">
+    <header>
+      <div class="masthead">
+        <h1 class="station-name">
+          <span id="station-name">Westerschelde</span>
+          <small>Wat mijn AIS-ontvanger zag</small>
+        </h1>
+        <nav class="tabs" aria-label="Pagina's">
+          <a href="/">Kaart</a>
+          <a href="/stats" aria-current="page">Statistieken</a>
+        </nav>
+      </div>
+      <p class="figure-sub" id="updated" role="status">Gegevens laden…</p>
+    </header>
+
+    <section class="stat-section" aria-labelledby="h-traffic">
+      <h2 id="h-traffic">Verkeer</h2>
+      <p class="lede">Het aantal verschillende schepen waarvan het station een positie ontving.</p>
+      <div class="two-up">
+        <div>
+          <h3 class="chart-title">Per uur, laatste 48 uur</h3>
+          <div id="hourly"></div>
+          <div id="hourly-table"></div>
+        </div>
+        <div>
+          <h3 class="chart-title">Per dag, laatste 90 dagen</h3>
+          <div id="daily"></div>
+          <div id="daily-table"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="stat-section" aria-labelledby="h-busy">
+      <h2 id="h-busy">Drukste momenten van de week</h2>
+      <p class="lede">Gemiddeld aantal schepen per uur over de laatste acht weken. Uren waarin het station niets ontving, tellen niet mee.</p>
+      <div class="heat-layout">
+        <div>
+          <div id="heatmap"></div>
+          <div class="scale" id="heat-scale"></div>
+          <div id="heat-table"></div>
+        </div>
+        <div>
+          <h3 class="chart-title">Drukst</h3>
+          <ol class="top-list" id="top"></ol>
+        </div>
+      </div>
+    </section>
+
+    <section class="stat-section" aria-labelledby="h-speed">
+      <h2 id="h-speed">Gemiddelde snelheid per scheepstype</h2>
+      <p class="lede">Alleen varende schepen (vanaf 1 knoop), hoogstens één meting per schip per 30 seconden.</p>
+      <div class="segmented periods" role="group" aria-label="Periode" id="periods">
+        <button type="button" data-period="7d">7 dagen</button>
+        <button type="button" data-period="30d" aria-pressed="true">30 dagen</button>
+        <button type="button" data-period="all">Alles</button>
+      </div>
+      <div id="speed"></div>
+      <div id="speed-table"></div>
+    </section>
+
+    <section class="stat-section" aria-labelledby="h-largest">
+      <h2 id="h-largest">Grootste schip van de maand</h2>
+      <div class="record" id="largest"></div>
+    </section>
+
+    <section class="stat-section" aria-labelledby="h-range">
+      <h2 id="h-range">Verste ontvangst ooit</h2>
+      <div class="record" id="range"></div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aisws"
+version = "0.1.0"
+description = "Eigen AIS-ontvangststation voor de Westerschelde: decoder, live kaart en statistieken"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Jamie van Riel" }]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "httpx2",
+]
+
+[project.scripts]
+aisws = "aisws.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aisws"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    # Zit in starlette.testclient zelf, niet in aisws.
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+]

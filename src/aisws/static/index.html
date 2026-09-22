@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Westerschelde live</title>
+  <meta name="description" content="Live kaart van de scheepvaart op de Westerschelde, ontvangen met een eigen AIS-station.">
+  <link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@6.10.0/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script type="module" src="/static/js/map.js"></script>
+</head>
+<body class="map-page">
+  <aside class="panel" aria-label="Schepen in beeld">
+    <header class="panel-head">
+      <div class="masthead">
+        <h1 class="station-name">
+          <span id="station-name">Westerschelde</span>
+          <small>Live van mijn eigen AIS-ontvanger</small>
+        </h1>
+        <nav class="tabs" aria-label="Pagina's">
+          <a href="/" aria-current="page">Kaart</a>
+          <a href="/stats">Statistieken</a>
+        </nav>
+      </div>
+      <dl class="vitals">
+        <div><dt>schepen in beeld</dt><dd id="count">–</dd></div>
+        <div><dt>berichten per minuut</dt><dd id="rate">–</dd></div>
+      </dl>
+      <p id="conn" class="conn" data-state="connecting" role="status">Verbinden…</p>
+    </header>
+    <div class="panel-body" id="panel-body">
+      <section id="list-view" aria-label="Lijst van schepen">
+        <div class="search">
+          <label for="filter" class="visually-hidden">Zoek een schip</label>
+          <input id="filter" type="search" placeholder="Zoek op naam of MMSI" autocomplete="off">
+          <ul class="legend" id="legend" aria-label="Kleuren op de kaart"></ul>
+        </div>
+        <ol class="ships" id="ships"></ol>
+        <p class="empty" id="empty" hidden></p>
+      </section>
+      <section id="detail-view" class="detail" hidden></section>
+    </div>
+  </aside>
+  <main id="map" aria-label="Kaart van de Westerschelde met schepen"></main>
+</body>
+</html>

@@ -1,0 +1,36 @@
+# Kopieer naar config.toml (ontwikkelen) of /etc/aisws/config.toml (Pi).
+# Alleen [station] lat/lon is verplicht; de rest zijn de standaardwaarden.
+
+[station]
+name = "Westerschelde"
+lat = 0.0            # vul de positie van je antenne in, bv. 51.44
+lon = 0.0            # bv. 3.58
+timezone = "Europe/Amsterdam"
+
+[ingest]
+udp_host = "127.0.0.1"   # AIS-catcher stuurt naar dit adres
+udp_port = 10110
+multipart_timeout_s = 2.0
+
+[tracker]
+stale_after_s = 600              # schip verdwijnt van de kaart na 10 min stilte
+stationary_sog_kn = 0.5          # daaronder telt een schip als stilliggend
+moving_sog_kn = 1.0              # vanaf hier telt de snelheid mee in de statistiek
+track_interval_moving_s = 30
+track_interval_stationary_s = 300
+track_cog_change_deg = 10
+speed_sample_interval_s = 30
+max_range_km = 400               # verder weg = foute positie
+max_implied_speed_kn = 60        # snellere sprong = foute positie
+
+[storage]
+db_path = "/var/lib/aisws/ais.db"
+flush_interval_s = 5
+positions_retention_days = 30
+cleanup_hour_local = 4
+max_pending_writes = 10000
+
+[web]
+host = "0.0.0.0"
+port = 8000
+ws_update_interval_s = 1.0
