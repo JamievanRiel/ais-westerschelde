@@ -5,7 +5,9 @@ opvangt, met een live kaart en statistieken over de scheepvaart van en naar
 Antwerpen. De decoder voor de AIS-berichten is zelf geschreven, zonder
 AIS-bibliotheek.
 
-<!-- Foto's van de opstelling en screenshots volgen zodra het station buiten hangt. -->
+![Live kaart van de Westerschelde met schepen en een lijst ernaast](docs/img/kaart.webp)
+
+<!-- Foto's van de opstelling volgen zodra het station buiten hangt. -->
 
 ## Keten
 
@@ -39,6 +41,14 @@ Vanaf zoomniveau 12 staan boeien en vaargeulen van OpenSeaMap erop.
 - grootste schip van de maand, op schaal getekend
 - verste ontvangst ooit, met een lijn vanaf het station op de kaart
 
+<p>
+  <img src="docs/img/kaart-schip-donker.webp" width="49%" alt="Donkere modus: een tanker geselecteerd, met gegevens en spoor">
+  <img src="docs/img/statistieken.webp" width="49%" alt="Statistiekenpagina met verkeer per uur en per dag, heatmap, snelheden en records">
+</p>
+
+De schermafbeeldingen tonen verzonnen verkeer uit het voorbeeldbestand en
+`tools/make_demo_db.py` (zie hieronder), geen echte ontvangst.
+
 ## Zonder antenne proberen
 
 Er zit een voorbeeldbestand bij met een kwartier verzonnen verkeer op de
@@ -63,6 +73,16 @@ kopregel aangeeft: dan lijken schepen onmogelijk hard te varen en verwerpt de
 tracker hun posities (zie hieronder). Bij elke herhaling met `--loop` springen
 de schepen terug naar het begin; de eerste posities daarna worden om dezelfde
 reden verworpen.
+
+Een kwartier verkeer is te weinig voor de statistieken. Voor een gevulde
+statistiekenpagina maakt `tools/make_demo_db.py` een database met 90 dagen
+verzonnen verkeer (dag- en weekpatroon, overbereik, heel grote schepen), dat
+door dezelfde tracker en opslag loopt als echte ontvangst. Duurt ongeveer een
+minuut:
+
+```bash
+.venv/bin/python tools/make_demo_db.py demo.db   # en zet db_path op "demo.db"
+```
 
 ## Op de Raspberry Pi
 

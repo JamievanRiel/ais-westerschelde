@@ -42,6 +42,11 @@ Het pakket bevat een recente RTL-SDR-driver en werkt daardoor ook met de
 maakt de service `ais-catcher.service` aan, met de instellingen in
 `/etc/AIS-catcher/config.cmd`.
 
+Let op: het script zet in `/etc/AIS-catcher/config.json` ook `"sharing": true`.
+AIS-catcher stuurt dan alles wat het ontvangt door naar de community-kaart van
+[aiscatcher.org](https://www.aiscatcher.org). Wil je dat niet, zet het dan op
+`false` voordat je de service start. Wil je wel meedoen, laat het dan staan.
+
 ## 3. AIS-catcher laten doorsturen naar aisws
 
 Zet in `/etc/AIS-catcher/config.cmd`:
@@ -62,7 +67,7 @@ sudo systemctl restart ais-catcher
 ```
 
 Kijk of er berichten binnenkomen, **voordat** je aisws installeert (daarna is
-de poort bezet):
+de poort bezet). Ontbreekt `nc`, installeer dan eerst `netcat-openbsd`:
 
 ```bash
 nc -ul 127.0.0.1 10110
@@ -80,6 +85,15 @@ webpagina op poort 8100, met signaalsterkte per bericht.
 git clone https://github.com/<jouw-account>/ais-westerschelde.git ~/ais-westerschelde
 cd ~/ais-westerschelde
 sudo deploy/install.sh
+```
+
+Is de repo privé, log dan eerst op de Pi in bij GitHub, anders vraagt `git clone`
+om een wachtwoord dat niet werkt:
+
+```bash
+sudo apt install -y gh
+gh auth login          # kies HTTPS en "Login with a web browser"
+gh auth setup-git
 ```
 
 Het script maakt een systeemgebruiker `aisws` aan, installeert het programma in
