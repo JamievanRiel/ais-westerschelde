@@ -1,4 +1,5 @@
-// Kleine SVG-grafieken: kolommen, liggende balken en een tooltip.
+// Kleine SVG-grafieken: kolommen (ook boven en onder een nullijn), liggende balken,
+// taartpunten rond het station en een tooltip.
 // Waarden komen ook altijd in een tabel onder de grafiek, de tooltip is extra.
 
 const NS = "http://www.w3.org/2000/svg";
@@ -38,7 +39,8 @@ export function hideTip() {
 // --- hulpjes --------------------------------------------------------------------------
 
 // As tot een rond getal met hoogstens drie ronde stappen (1, 2 of 5 × 10ⁿ, minstens 1:
-// het zijn aantallen schepen). Zo 0-10-20-30 in plaats van 0-13-25.
+// aantallen schepen en kilometers hebben geen fijnere stap nodig). Zo 0-10-20-30 in
+// plaats van 0-13-25.
 function niceScale(max) {
   const raw = Math.max(1, max / 3);
   const exponent = 10 ** Math.floor(Math.log10(raw));
@@ -52,9 +54,37 @@ function columnPath(x, y, w, h) {
   return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
 }
 
+// Kolom onder een nullijn: recht aan de lijn, afgerond aan de datakant (onder).
+function columnDownPath(x, y, w, h) {
+  const r = Math.min(4, w / 2, h);
+  return `M${x},${y} L${x + w},${y} L${x + w},${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} L${x + r},${y + h} Q${x},${y + h} ${x},${y + h - r} Z`;
+}
+
 function barPath(x, y, w, h) {
   const r = Math.min(4, h / 2, w);
   return `M${x},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h - r} Q${x + w},${y + h} ${x + w - r},${y + h} L${x},${y + h} Z`;
+}
+
+// Met pijltjestoetsen door de markeringen lopen; ``focus(i)`` toont dezelfde tooltip
+// als hover. Bij ``wrap`` (rondom, zoals kompasrichtingen) loopt het door na het eind.
+function keyboard(svg, count, focus, clear, { wrap = false } = {}) {
+  let active = -1;
+  const go = (index) => {
+    active = wrap ? (index + count) % count : Math.max(0, Math.min(count - 1, index));
+    focus(active);
+  };
+  svg.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowRight" || (wrap && event.key === "ArrowDown")) go(active + 1);
+    else if (event.key === "ArrowLeft" || (wrap && event.key === "ArrowUp")) go(active < 0 ? count - 1 : active - 1);
+    else if (event.key === "Home") go(0);
+    else if (event.key === "End") go(count - 1);
+    else return;
+    event.preventDefault();
+  });
+  svg.addEventListener("blur", () => {
+    hideTip();
+    clear();
+  });
 }
 
 const observers = new WeakMap();
@@ -85,7 +115,6 @@ function onResize(container, draw) {
  */
 export function columnChart(container, points, { format, height = 180, name }) {
   container.classList.add("chart");
-  let active = -1;
 
   function draw(width) {
     const margin = { top: 20, right: 4, bottom: 24, left: 34 };
@@ -152,25 +181,11 @@ export function columnChart(container, points, { format, height = 180, name }) {
       svg.append(top);
     }
 
-    // Met pijltjestoetsen door de kolommen lopen; toont dezelfde tooltip als hover.
-    const focusBar = (index) => {
-      active = Math.max(0, Math.min(points.length - 1, index));
+    keyboard(svg, points.length, (active) => {
       const box = bars[active].hit.getBoundingClientRect();
       bars.forEach((b, i) => b.mark.classList.toggle("active", i === active));
       showTip(box.left + box.width / 2, box.top + 20, format(points[active].value), points[active].label);
-    };
-    svg.addEventListener("keydown", (event) => {
-      if (event.key === "ArrowRight") focusBar(active + 1);
-      else if (event.key === "ArrowLeft") focusBar(active < 0 ? points.length - 1 : active - 1);
-      else if (event.key === "Home") focusBar(0);
-      else if (event.key === "End") focusBar(points.length - 1);
-      else return;
-      event.preventDefault();
-    });
-    svg.addEventListener("blur", () => {
-      hideTip();
-      bars.forEach((b) => b.mark.classList.remove("active"));
-    });
+    }, () => bars.forEach((b) => b.mark.classList.remove("active")));
 
     container.replaceChildren(svg);
   }
@@ -206,6 +221,164 @@ export function barChart(container, rows, { format, name }) {
       hit.addEventListener("pointerleave", hideTip);
       svg.append(label, hit, mark, value);
     });
+    container.replaceChildren(svg);
+  }
+
+  onResize(container, draw);
+}
+
+// --- kolommen boven en onder een nullijn -------------------------------------------------
+
+/**
+ * Twee richtingen van één maat: ``up`` boven de nullijn, ``down`` eronder, in dezelfde
+ * kleur; de positie zegt welke richting het is, de labels boven en onder benoemen ze.
+ * points: [{ up, down, tick, label }]
+ * options.tip(point) → tekst voor de tooltip; options.format(value) → as-tekst
+ */
+export function divergingChart(container, points, { format, tip, labels, height = 200, name }) {
+  container.classList.add("chart");
+
+  function draw(width) {
+    const margin = { top: 20, right: 4, bottom: 40, left: 34 };
+    const plotW = Math.max(40, width - margin.left - margin.right);
+    const half = height / 2;
+    const zero = margin.top + half;
+    const scale = niceScale(Math.max(0, ...points.flatMap((p) => [p.up, p.down])));
+    const len = (v) => (v / scale.max) * half;
+    const band = plotW / points.length;
+    const barW = Math.max(1, Math.min(24, band - 2));
+
+    const svg = el("svg", {
+      viewBox: `0 0 ${width} ${height + margin.top + margin.bottom}`,
+      role: "img",
+      "aria-label": name,
+      tabindex: "0",
+    });
+
+    const tickLabel = (value, gy) => {
+      const label = el("text", { x: margin.left - 6, y: gy + 4, "text-anchor": "end" });
+      label.textContent = format(value);
+      svg.append(label);
+    };
+    for (let value = scale.step; value <= scale.max; value += scale.step) {
+      for (const gy of [zero - len(value), zero + len(value)]) {
+        svg.append(el("line", { class: "grid", x1: margin.left, x2: width - margin.right, y1: gy, y2: gy }));
+        tickLabel(value, gy);
+      }
+    }
+    svg.append(el("line", { class: "axis", x1: margin.left, x2: width - margin.right, y1: zero, y2: zero }));
+    tickLabel(0, zero);
+
+    const upLabel = el("text", { class: "series-label", x: margin.left, y: margin.top - 8 });
+    upLabel.textContent = `↑ ${labels.up}`;
+    const downLabel = el("text", { class: "series-label", x: margin.left, y: zero + half + 34 });
+    downLabel.textContent = `↓ ${labels.down}`;
+    svg.append(upLabel, downLabel);
+
+    // 1 px lucht aan weerszijden van de nullijn, zodat op en af niet tegen elkaar plakken.
+    const columns = points.map((p, i) => {
+      const x = margin.left + i * band + (band - barW) / 2;
+      const hit = el("rect", { class: "hit", x: margin.left + i * band, y: margin.top, width: band, height });
+      const marks = el("g", { class: "marks" });
+      if (p.up > 0) marks.append(el("path", { class: "mark", d: columnPath(x, zero - 1 - len(p.up), barW, len(p.up)) }));
+      if (p.down > 0) marks.append(el("path", { class: "mark", d: columnDownPath(x, zero + 1, barW, len(p.down)) }));
+      hit.addEventListener("pointermove", (event) => showTip(event.clientX, event.clientY, tip(p), p.label));
+      hit.addEventListener("pointerleave", hideTip);
+      svg.append(hit, marks);
+      if (p.tick) {
+        const tick = el("text", { x: x + barW / 2, y: zero + half + 16, "text-anchor": "middle" });
+        tick.textContent = p.tick;
+        svg.append(tick);
+      }
+      return { hit, marks };
+    });
+
+    keyboard(svg, points.length, (active) => {
+      const box = columns[active].hit.getBoundingClientRect();
+      columns.forEach((c, i) => c.marks.classList.toggle("active", i === active));
+      showTip(box.left + box.width / 2, box.top + 20, tip(points[active]), points[active].label);
+    }, () => columns.forEach((c) => c.marks.classList.remove("active")));
+
+    container.replaceChildren(svg);
+  }
+
+  onResize(container, draw);
+}
+
+// --- taartpunten rond het station ---------------------------------------------------------
+
+const COMPASS = ["N", "NNO", "NO", "ONO", "O", "OZO", "ZO", "ZZO", "Z", "ZZW", "ZW", "WZW", "W", "WNW", "NW", "NNW"];
+
+/** Kompasrichting in 16 streken, zoals op een zeekaart: 95° → "O". */
+export function compass(deg) {
+  return COMPASS[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+}
+
+/**
+ * Afstand per richting vanaf een middelpunt: 0° = noord, met de klok mee. De straal is
+ * de afstand zelf (lineair), zodat het diagram leest als een kaartje rond het station.
+ * Geen getallen bij de punten: de verste richting hoort in een zin bij het diagram.
+ * sectors: [{ from, to, value | null, label }]
+ * options.format(value, axis) → tekst voor tooltip en ringen
+ */
+export function polarChart(container, sectors, { format, name, empty = "niets ontvangen" }) {
+  container.classList.add("chart", "polar");
+
+  function draw(width) {
+    const size = Math.min(width, 420);
+    const pad = 22;
+    const radius = size / 2 - pad;
+    const cx = width / 2;
+    const cy = size / 2;
+    const scale = niceScale(Math.max(0, ...sectors.map((s) => s.value ?? 0)));
+    const r = (v) => (v / scale.max) * radius;
+    const at = (deg, dist) => {
+      const a = (deg * Math.PI) / 180;
+      return [cx + dist * Math.sin(a), cy - dist * Math.cos(a)];
+    };
+    const wedge = (from, to, dist) => {
+      const [x0, y0] = at(from, dist);
+      const [x1, y1] = at(to, dist);
+      return `M${cx},${cy} L${x0},${y0} A${dist},${dist} 0 0 1 ${x1},${y1} Z`;
+    };
+
+    const svg = el("svg", { viewBox: `0 0 ${width} ${size}`, role: "img", "aria-label": name, tabindex: "0" });
+
+    // Ringwaarden op de diagonaal naar het noordoosten, weg van de kompasletters.
+    for (let value = scale.step; value <= scale.max; value += scale.step) {
+      svg.append(el("circle", { class: "grid ring", cx, cy, r: r(value) }));
+      const [x, y] = at(45, r(value));
+      const label = el("text", { x: x + 3, y: y - 3 });
+      label.textContent = format(value, true);
+      svg.append(label);
+    }
+    for (const [deg, text] of [[0, "N"], [90, "O"], [180, "Z"], [270, "W"]]) {
+      const [x, y] = at(deg, radius + 12);
+      const label = el("text", { class: "compass", x, y: y + 4, "text-anchor": "middle" });
+      label.textContent = text;
+      svg.append(label);
+    }
+
+    const wedges = sectors.map((s) => {
+      const hit = el("path", { class: "hit", d: wedge(s.from, s.to, radius) });
+      const mark = el("path", { class: "mark", d: s.value ? wedge(s.from, s.to, r(s.value)) : "" });
+      const value = s.value ? format(s.value) : empty;
+      hit.addEventListener("pointermove", (event) => showTip(event.clientX, event.clientY, value, s.label));
+      hit.addEventListener("pointerleave", hideTip);
+      svg.append(hit, mark);
+      return { hit, mark, value };
+    });
+    svg.append(el("circle", { class: "station", cx, cy, r: 3.5 }));
+
+    keyboard(svg, sectors.length, (active) => {
+      const s = sectors[active];
+      const [x, y] = at((s.from + s.to) / 2, Math.max(r(s.value ?? 0), radius * 0.3));
+      const box = svg.getBoundingClientRect();
+      const k = box.width / width;
+      wedges.forEach((w, i) => w.mark.classList.toggle("active", i === active));
+      showTip(box.left + x * k, box.top + y * k, wedges[active].value, s.label);
+    }, () => wedges.forEach((w) => w.mark.classList.remove("active")), { wrap: true });
+
     container.replaceChildren(svg);
   }
 

@@ -1,6 +1,15 @@
 // Statistiekenpagina: haalt /api/stats/* op en tekent grafieken, heatmap en records.
 
-import { barChart, columnChart, hideTip, showTip, tableView } from "./charts.js";
+import {
+  barChart,
+  columnChart,
+  compass,
+  divergingChart,
+  hideTip,
+  polarChart,
+  showTip,
+  tableView,
+} from "./charts.js";
 import { colorClass, CLASSES, groupLabel } from "./shiptypes.js";
 import * as fmt from "./format.js";
 
@@ -17,6 +26,38 @@ function empty(container, text) {
   p.className = "muted";
   p.textContent = text;
   container.replaceChildren(p);
+}
+
+function dataTable(headers, rows) {
+  const table = document.createElement("table");
+  table.className = "data-table";
+  const head = table.createTHead().insertRow();
+  for (const h of headers) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    head.append(th);
+  }
+  const body = table.createTBody();
+  for (const row of rows) {
+    const tr = body.insertRow();
+    for (const cell of row) tr.insertCell().textContent = cell;
+  }
+  return table;
+}
+
+// Een dag als kolom: om de 14 dagen (vanaf vandaag terug) een datum onder de as.
+function dayPoint(isoDate, index, count) {
+  const date = new Date(`${isoDate}T00:00`);
+  return {
+    tick: (count - 1 - index) % 14 === 0 ? date.toLocaleDateString("nl-NL", { day: "numeric", month: "short" }) : null,
+    label: date.toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long" }),
+  };
+}
+
+function markPressed(groupId, period) {
+  for (const button of $(groupId).querySelectorAll("button")) {
+    button.setAttribute("aria-pressed", String(button.dataset.period === period));
+  }
 }
 
 // --- verkeer ------------------------------------------------------------------------
@@ -49,21 +90,50 @@ function renderDaily(rows) {
     $("daily-table").replaceChildren();
     return;
   }
-  const points = rows.map((r, i) => {
-    const date = new Date(`${r.date}T00:00`);
-    return {
-      value: r.ships,
-      tick: (rows.length - 1 - i) % 14 === 0
-        ? date.toLocaleDateString("nl-NL", { day: "numeric", month: "short" })
-        : null,
-      label: date.toLocaleDateString("nl-NL", { weekday: "long", day: "numeric", month: "long" }),
-    };
-  });
+  const points = rows.map((r, i) => ({ value: r.ships, ...dayPoint(r.date, i, rows.length) }));
   columnChart($("daily"), points, {
     name: "Aantal verschillende schepen per dag, laatste 90 dagen",
     format: (v, axis) => (axis ? fmt.number(v) : ships(v)),
   });
   tableView($("daily-table"), ["Dag", "Schepen"], rows.map((r) => [r.date, fmt.number(r.ships)]));
+}
+
+// --- doorvaart -------------------------------------------------------------------------
+
+function renderPassages(data) {
+  $("h-passages").textContent = data.gate?.name ? `Doorvaart bij ${data.gate.name}` : "Doorvaart";
+  const today = [["de Schelde op, vandaag", data.today.up], ["de Schelde af, vandaag", data.today.down]];
+  $("passages-today").replaceChildren(...today.map(([label, value]) => {
+    const div = document.createElement("div");
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = fmt.number(value);
+    div.append(dt, dd);
+    return div;
+  }));
+
+  const rows = data.days;
+  if (!rows.some((r) => r.up || r.down)) {
+    empty($("passages"), "Nog geen schepen over de lijn gezien.");
+    $("passages-table").replaceChildren();
+    empty($("passages-types"), "Nog niets te tellen.");
+    return;
+  }
+  divergingChart($("passages"), rows.map((r, i) => ({ up: r.up, down: r.down, ...dayPoint(r.date, i, rows.length) })), {
+    name: "Schepen per dag over de lijn, laatste 90 dagen: boven de nullijn de Schelde op, eronder de Schelde af",
+    labels: { up: "de Schelde op", down: "de Schelde af" },
+    format: (v) => fmt.number(v),
+    tip: (p) => `${fmt.number(p.up)} op, ${fmt.number(p.down)} af`,
+  });
+  tableView($("passages-table"), ["Dag", "Op", "Af"], rows.map((r) => [r.date, fmt.number(r.up), fmt.number(r.down)]));
+  if (data.by_type.length) {
+    $("passages-types").replaceChildren(dataTable(["Type", "Op", "Af"], data.by_type.map((t) => [
+      groupLabel(t.type_group), fmt.number(t.up), fmt.number(t.down),
+    ])));
+  } else {
+    empty($("passages-types"), "Geen doorvaarten in de laatste 30 dagen.");
+  }
 }
 
 // --- drukste momenten ------------------------------------------------------------------
@@ -146,9 +216,7 @@ function renderHeatmap(data) {
 // --- snelheid ------------------------------------------------------------------------------
 
 async function loadSpeed(period) {
-  for (const button of $("periods").querySelectorAll("button")) {
-    button.setAttribute("aria-pressed", String(button.dataset.period === period));
-  }
+  markPressed("periods", period);
   const rows = await fmt.getJson(`/api/stats/speed?period=${period}`);
   if (!rows.length) {
     empty($("speed"), "Nog geen varende schepen gemeten in deze periode.");
@@ -241,22 +309,9 @@ function renderLargest(data) {
   title.textContent = "Eerdere maanden";
   right.append(title);
   if (data.previous.length) {
-    const table = document.createElement("table");
-    table.className = "data-table";
-    const head = table.createTHead().insertRow();
-    for (const h of ["Maand", "Schip", "Lengte"]) {
-      const th = document.createElement("th");
-      th.textContent = h;
-      head.append(th);
-    }
-    const body = table.createTBody();
-    for (const m of data.previous) {
-      const tr = body.insertRow();
-      tr.insertCell().textContent = fmt.monthName(m.month);
-      tr.insertCell().textContent = m.name ?? `MMSI ${m.mmsi}`;
-      tr.insertCell().textContent = `${m.length} m`;
-    }
-    right.append(table);
+    right.append(dataTable(["Maand", "Schip", "Lengte"], data.previous.map((m) => [
+      fmt.monthName(m.month), m.name ?? `MMSI ${m.mmsi}`, `${m.length} m`,
+    ])));
   } else {
     const p = document.createElement("p");
     p.className = "muted";
@@ -308,20 +363,7 @@ function renderRange(data) {
     const rows = [...data.history].reverse().map((r) => [
       fmt.dateTime(r.ts), r.name ?? `MMSI ${r.mmsi}`, `${fmt.number(r.distance_km, 1)} km`,
     ]);
-    const table = document.createElement("table");
-    table.className = "data-table";
-    const head = table.createTHead().insertRow();
-    for (const h of headers) {
-      const th = document.createElement("th");
-      th.textContent = h;
-      head.append(th);
-    }
-    const body = table.createTBody();
-    for (const row of rows.slice(0, RECORDS_SHOWN)) {
-      const tr = body.insertRow();
-      for (const cell of row) tr.insertCell().textContent = cell;
-    }
-    right.append(table);
+    right.append(dataTable(headers, rows.slice(0, RECORDS_SHOWN)));
     // In de eerste dagen komt er bijna elk uur een record bij; de oudste gaan achter een klik.
     if (rows.length > RECORDS_SHOWN) {
       const older = document.createElement("div");
@@ -337,18 +379,54 @@ function renderRange(data) {
   box.replaceChildren(left, right);
 }
 
+// --- bereik per richting --------------------------------------------------------------------------
+
+async function loadCoverage(period) {
+  markPressed("coverage-periods", period);
+  const data = await fmt.getJson(`/api/stats/coverage?period=${period}`);
+  const direction = (s) => `${compass(s.from_deg + 5)}, ${s.from_deg}–${s.from_deg + 10}°`;
+  const ship = (s) => s.name ?? `MMSI ${s.mmsi}`;
+  if (!data.sectors.some((s) => s.max_km !== null)) {
+    empty($("coverage"), "Nog geen gecontroleerde posities in deze periode.");
+    $("coverage-best").replaceChildren();
+    $("coverage-table").replaceChildren();
+    return;
+  }
+  polarChart($("coverage"), data.sectors.map((s) => ({
+    from: s.from_deg,
+    to: s.from_deg + 10,
+    value: s.max_km,
+    label: s.max_km === null ? direction(s) : `${direction(s)}, ${ship(s)}`,
+  })), {
+    name: "Verste ontvangst per richting van 10 graden, met het station in het midden en noord boven",
+    format: (v, axis) => `${fmt.number(v, axis ? 0 : 1)} km`,
+  });
+  const best = data.sectors.reduce((b, s) => ((s.max_km ?? 0) > (b.max_km ?? 0) ? s : b));
+  const strong = document.createElement("strong");
+  strong.textContent = `${fmt.number(best.max_km, 1)} km`;
+  $("coverage-best").replaceChildren("Het verst in deze periode: ", strong, ` naar ${direction(best)}, ${ship(best)}.`);
+  tableView($("coverage-table"), ["Richting", "Verste ontvangst", "Schip"], data.sectors.map((s) => [
+    direction(s),
+    s.max_km === null ? "–" : `${fmt.number(s.max_km, 1)} km`,
+    s.max_km === null ? "" : ship(s),
+  ]));
+}
+
 // --- opstarten ------------------------------------------------------------------------------------
 
 let period = "30d";
+let coveragePeriod = "30d";
 
 async function loadAll() {
   const results = await Promise.allSettled([
     fmt.getJson("/api/stats/hourly?hours=48").then(renderHourly),
     fmt.getJson("/api/stats/daily?days=90").then(renderDaily),
+    fmt.getJson("/api/stats/passages?days=90").then(renderPassages),
     fmt.getJson("/api/stats/heatmap?weeks=8").then(renderHeatmap),
     loadSpeed(period),
     fmt.getJson("/api/stats/largest?months=12").then(renderLargest),
     fmt.getJson("/api/stats/range").then(renderRange),
+    loadCoverage(coveragePeriod),
   ]);
   const failed = results.filter((r) => r.status === "rejected").length;
   const time = new Date().toLocaleTimeString("nl-NL", { hour: "2-digit", minute: "2-digit" });
@@ -370,6 +448,12 @@ async function start() {
     if (!button) return;
     period = button.dataset.period;
     loadSpeed(period).catch(() => empty($("speed"), "Snelheden konden niet laden."));
+  });
+  $("coverage-periods").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-period]");
+    if (!button) return;
+    coveragePeriod = button.dataset.period;
+    loadCoverage(coveragePeriod).catch(() => empty($("coverage"), "Het bereik kon niet laden."));
   });
   await loadAll();
   setInterval(loadAll, 300_000);

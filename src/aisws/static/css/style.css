@@ -610,6 +610,38 @@ input {
   stroke-width: 2;
 }
 
+.chart .hit:hover + .marks .mark,
+.chart .marks.active .mark {
+  fill: var(--seq-4);
+}
+
+.chart .series-label {
+  fill: var(--ink-2);
+  font-size: 12px;
+}
+
+.chart.polar .ring {
+  fill: none;
+}
+
+/* 1 px rand in de paginakleur: 2 px naad tussen buurpunten. */
+.chart.polar .mark {
+  stroke: var(--paper);
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+
+.chart.polar .compass {
+  fill: var(--ink-2);
+  font-weight: 600;
+}
+
+.chart.polar .station {
+  fill: var(--magenta);
+  stroke: var(--paper);
+  stroke-width: 2;
+}
+
 .tooltip {
   position: fixed;
   z-index: 10;
@@ -696,7 +728,8 @@ input {
   text-align: center;
 }
 
-.heat-layout {
+.heat-layout,
+.side-layout {
   display: grid;
   grid-template-columns: 1fr 220px;
   gap: 32px;
@@ -809,6 +842,7 @@ input {
 
   .two-up,
   .heat-layout,
+  .side-layout,
   .record {
     grid-template-columns: 1fr;
   }
@@ -824,4 +858,8 @@ input {
     transition: none !important;
     animation: none !important;
   }
+}
+
+.stat-section .vitals {
+  margin: 4px 0 18px;
 }

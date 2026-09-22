@@ -33,6 +33,7 @@ const CHART = {
 
 const state = {
   station: null,
+  gate: null,
   vessels: new Map(),
   selected: null,
   detail: null,
@@ -182,10 +183,33 @@ function addOverlays() {
     beforeLabels,
   );
 
+  map.addSource("gate", { type: "geojson", data: gateGeoJson() });
   map.addSource("record", { type: "geojson", data: recordGeoJson() });
   map.addSource("track", { type: "geojson", data: trackGeoJson() });
   map.addSource("ships", { type: "geojson", data: shipsGeoJson() });
 
+  // De doorvaartlijn: gestippeld in drukinkt, rustiger dan de magenta van het station.
+  map.addLayer({
+    id: "gate-line",
+    type: "line",
+    source: "gate",
+    layout: { "line-cap": "round" },
+    paint: { "line-color": p.ink2, "line-width": 1.5, "line-dasharray": [0.5, 2.5] },
+  });
+  map.addLayer({
+    id: "gate-label",
+    type: "symbol",
+    source: "gate",
+    minzoom: 10,
+    layout: {
+      "symbol-placement": "line",
+      "text-field": ["get", "label"],
+      "text-font": ["Noto Sans Regular"],
+      "text-size": 10,
+      "text-offset": [0, -0.8],
+    },
+    paint: { "text-color": p.ink2, "text-halo-color": p.labelHalo, "text-halo-width": 1.5 },
+  });
   map.addLayer({
     id: "record-line",
     type: "line",
@@ -328,6 +352,18 @@ function trackGeoJson() {
   if (live) coords.push([live.lon, live.lat]);
   const features = coords.length > 1
     ? [{ type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: {} }]
+    : [];
+  return { type: "FeatureCollection", features };
+}
+
+function gateGeoJson() {
+  const g = state.gate;
+  const features = g
+    ? [{
+      type: "Feature",
+      geometry: { type: "LineString", coordinates: [[g.lon1, g.lat1], [g.lon2, g.lat2]] },
+      properties: { label: `doorvaartlijn ${g.name}` },
+    }]
     : [];
   return { type: "FeatureCollection", features };
 }
@@ -670,6 +706,7 @@ async function start() {
   try {
     const config = await fmt.getJson("/api/config");
     state.station = config.station;
+    state.gate = config.gate ?? null;
     $("station-name").textContent = config.station.name;
     document.title = `${config.station.name} live`;
   } catch {

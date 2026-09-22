@@ -42,6 +42,23 @@
       </div>
     </section>
 
+    <section class="stat-section" aria-labelledby="h-passages">
+      <h2 id="h-passages">Doorvaart</h2>
+      <p class="lede">Schepen die de lijn over de Schelde kruisten. Naar het oosten telt als de Schelde op (Vlissingen-Oost, Terneuzen, Antwerpen), naar het westen als de Schelde af.</p>
+      <dl class="vitals" id="passages-today"></dl>
+      <div class="side-layout">
+        <div>
+          <h3 class="chart-title">Per dag, laatste 90 dagen</h3>
+          <div id="passages"></div>
+          <div id="passages-table"></div>
+        </div>
+        <div>
+          <h3 class="chart-title">Per type, laatste 30 dagen</h3>
+          <div id="passages-types"></div>
+        </div>
+      </div>
+    </section>
+
     <section class="stat-section" aria-labelledby="h-busy">
       <h2 id="h-busy">Drukste momenten van de week</h2>
       <p class="lede">Gemiddeld aantal schepen per uur over de laatste acht weken. Uren waarin het station niets ontving, tellen niet mee.</p>
@@ -78,6 +95,19 @@
     <section class="stat-section" aria-labelledby="h-range">
       <h2 id="h-range">Verste ontvangst ooit</h2>
       <div class="record" id="range"></div>
+    </section>
+
+    <section class="stat-section" aria-labelledby="h-coverage">
+      <h2 id="h-coverage">Bereik per richting</h2>
+      <p class="lede">Per richting van 10° de verste positie die de controle doorstond, met het station in het midden. Een korte punt kan een gebouw of dijk in de weg zijn, of een richting waar geen schepen varen.</p>
+      <div class="segmented periods" role="group" aria-label="Periode" id="coverage-periods">
+        <button type="button" data-period="7d">7 dagen</button>
+        <button type="button" data-period="30d" aria-pressed="true">30 dagen</button>
+        <button type="button" data-period="all">Alles</button>
+      </div>
+      <div id="coverage"></div>
+      <p class="figure-sub" id="coverage-best"></p>
+      <div id="coverage-table"></div>
     </section>
   </main>
 </body>
