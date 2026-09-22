@@ -182,3 +182,7 @@ voorbeeldbestand via UDP af tegen de echte app.
 [OpenSeaMap](https://www.openseamap.org) en het lettertype
 [IBM Plex Sans](https://github.com/IBM/plex) (SIL Open Font License, zie
 `src/aisws/static/fonts/OFL.txt`).
+
+## Licentie
+
+MIT, zie [LICENSE](LICENSE).
