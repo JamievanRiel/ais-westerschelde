@@ -70,6 +70,7 @@ function renderDaily(rows) {
 
 function renderHeatmap(data) {
   const values = data.cells.flat().filter((v) => v !== null);
+  $("top-block").hidden = !values.length;
   if (!values.length) {
     empty($("heatmap"), "Nog te weinig gegevens. Na een paar dagen draaien verschijnt hier het weekpatroon.");
     $("heat-scale").replaceChildren();
@@ -267,6 +268,8 @@ function renderLargest(data) {
 
 // --- verste ontvangst -----------------------------------------------------------------------------
 
+const RECORDS_SHOWN = 8;
+
 function renderRange(data) {
   const box = $("range");
   const left = document.createElement("div");
@@ -301,22 +304,30 @@ function renderRange(data) {
   title.textContent = "Hoe het record groeide";
   right.append(title);
   if (data.history.length > 1) {
+    const headers = ["Datum", "Schip", "Afstand"];
+    const rows = [...data.history].reverse().map((r) => [
+      fmt.dateTime(r.ts), r.name ?? `MMSI ${r.mmsi}`, `${fmt.number(r.distance_km, 1)} km`,
+    ]);
     const table = document.createElement("table");
     table.className = "data-table";
     const head = table.createTHead().insertRow();
-    for (const h of ["Datum", "Schip", "Afstand"]) {
+    for (const h of headers) {
       const th = document.createElement("th");
       th.textContent = h;
       head.append(th);
     }
     const body = table.createTBody();
-    for (const r of [...data.history].reverse()) {
+    for (const row of rows.slice(0, RECORDS_SHOWN)) {
       const tr = body.insertRow();
-      tr.insertCell().textContent = fmt.dateTime(r.ts);
-      tr.insertCell().textContent = r.name ?? `MMSI ${r.mmsi}`;
-      tr.insertCell().textContent = `${fmt.number(r.distance_km, 1)} km`;
+      for (const cell of row) tr.insertCell().textContent = cell;
     }
     right.append(table);
+    // In de eerste dagen komt er bijna elk uur een record bij; de oudste gaan achter een klik.
+    if (rows.length > RECORDS_SHOWN) {
+      const older = document.createElement("div");
+      tableView(older, headers, rows.slice(RECORDS_SHOWN), `Nog ${rows.length - RECORDS_SHOWN} eerdere records`);
+      right.append(older);
+    }
   } else {
     const p = document.createElement("p");
     p.className = "muted";

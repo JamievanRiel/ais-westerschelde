@@ -37,13 +37,13 @@ export function hideTip() {
 
 // --- hulpjes --------------------------------------------------------------------------
 
-function niceMax(max) {
-  if (max <= 0) return 1;
-  const exponent = 10 ** Math.floor(Math.log10(max));
-  for (const step of [1, 2, 2.5, 5, 10]) {
-    if (step * exponent >= max) return step * exponent;
-  }
-  return 10 * exponent;
+// As tot een rond getal met hoogstens drie ronde stappen (1, 2 of 5 × 10ⁿ, minstens 1:
+// het zijn aantallen schepen). Zo 0-10-20-30 in plaats van 0-13-25.
+function niceScale(max) {
+  const raw = Math.max(1, max / 3);
+  const exponent = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 5, 10].map((s) => s * exponent).find((s) => s >= raw);
+  return { max: Math.max(step, Math.ceil(max / step) * step), step };
 }
 
 // Balk met 4px afgeronde data-kant; de kant aan de basislijn blijft recht.
@@ -91,7 +91,8 @@ export function columnChart(container, points, { format, height = 180, name }) {
     const margin = { top: 20, right: 4, bottom: 24, left: 34 };
     const plotW = Math.max(40, width - margin.left - margin.right);
     const plotH = height;
-    const max = niceMax(Math.max(0, ...points.map((p) => p.value)));
+    const scale = niceScale(Math.max(0, ...points.map((p) => p.value)));
+    const max = scale.max;
     const band = plotW / points.length;
     const barW = Math.max(1, Math.min(24, band - 2));
     const y = (v) => margin.top + plotH - (v / max) * plotH;
@@ -103,10 +104,9 @@ export function columnChart(container, points, { format, height = 180, name }) {
       tabindex: "0",
     });
 
-    for (const t of [0, 0.5, 1]) {
-      const value = max * t;
+    for (let value = 0; value <= max; value += scale.step) {
       const gy = y(value);
-      svg.append(el("line", { class: t === 0 ? "axis" : "grid", x1: margin.left, x2: width - margin.right, y1: gy, y2: gy }));
+      svg.append(el("line", { class: value === 0 ? "axis" : "grid", x1: margin.left, x2: width - margin.right, y1: gy, y2: gy }));
       const label = el("text", { x: margin.left - 6, y: gy + 4, "text-anchor": "end" });
       label.textContent = format(value, true);
       svg.append(label);
