@@ -7,17 +7,30 @@ schrijfverbinding: ``close`` wacht tot een lopende flush klaar is, want een
 SQLite-verbinding sluiten terwijl een andere thread hem gebruikt kan crashen.
 """
 
+import os
+import re
 import sqlite3
 import threading
 from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
-from aisws.tracker import STATIC_FIELDS, Event, HourSample, RangeRecord, TrackPoint, VesselUpdate
+from aisws.tracker import (
+    STATIC_FIELDS,
+    Event,
+    GateCrossing,
+    HourSample,
+    RangeRecord,
+    SectorSample,
+    TrackPoint,
+    VesselUpdate,
+)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 RECORD_MERGE_S = 3600
 SCHEMA = """
 CREATE TABLE vessels (
@@ -44,6 +57,35 @@ CREATE TABLE range_records (
   lat REAL NOT NULL, lon REAL NOT NULL, distance_m REAL NOT NULL
 );
 """
+# Per versie wat erbij kwam; een oudere database krijgt bij het openen de ontbrekende stappen.
+MIGRATIONS = {
+    2: """
+CREATE TABLE range_sectors (
+  day_ts INTEGER NOT NULL, sector INTEGER NOT NULL,
+  max_range_m REAL NOT NULL, mmsi INTEGER NOT NULL,
+  PRIMARY KEY (day_ts, sector)
+) WITHOUT ROWID;
+CREATE TABLE gate_crossings (
+  ts INTEGER NOT NULL, mmsi INTEGER NOT NULL, upstream INTEGER NOT NULL
+);
+CREATE INDEX gate_crossings_ts ON gate_crossings (ts);
+""",
+}
+FULL_SCHEMA = SCHEMA + "".join(MIGRATIONS[v] for v in sorted(MIGRATIONS))
+
+# Wat een back-up bevat: alles wat niet terug te halen is. De tracksporen (positions)
+# zijn groot en na 30 dagen toch weg, die blijven eruit.
+BACKUP_TABLES = ("vessels", "vessel_hours", "range_records", "range_sectors", "gate_crossings")
+BACKUP_NAME = re.compile(r"^ais-\d{4}-\d{2}-\d{2}\.db$")
+
+
+class SchemaError(RuntimeError):
+    pass
+
+
+class BackupError(RuntimeError):
+    pass
+
 
 # Statisch veld in de tracker → kolom in de database.
 COLUMNS = {key: key for key in STATIC_FIELDS} | {
@@ -73,6 +115,8 @@ class _Batch:
     hours: dict[tuple[int, int], list[float]] = field(default_factory=dict)
     vessels: dict[int, _Vessel] = field(default_factory=dict)
     records: list[RangeRecord] = field(default_factory=list)
+    sectors: dict[tuple[int, int], tuple[float, int]] = field(default_factory=dict)
+    crossings: list[GateCrossing] = field(default_factory=list)
 
     def add(self, event: Event) -> None:
         if isinstance(event, TrackPoint):
@@ -85,6 +129,15 @@ class _Batch:
             self._add_vessel(event.mmsi, _Vessel(event.ais_class, event.ts, event.ts, dict(event.static)))
         elif isinstance(event, RangeRecord):
             self.records.append(event)
+        elif isinstance(event, SectorSample):
+            self._add_sector((event.day_ts, event.sector), (event.distance_m, event.mmsi))
+        elif isinstance(event, GateCrossing):
+            self.crossings.append(event)
+
+    def _add_sector(self, key: tuple[int, int], value: tuple[float, int]) -> None:
+        current = self.sectors.get(key)
+        if current is None or value[0] > current[0]:
+            self.sectors[key] = value
 
     def _add_hour(self, key: tuple[int, int], values: list[float]) -> None:
         current = self.hours.get(key)
@@ -109,9 +162,13 @@ class _Batch:
         for mmsi, vessel in newer.vessels.items():
             self._add_vessel(mmsi, vessel)
         self.records.extend(newer.records)
+        for key, value in newer.sectors.items():
+            self._add_sector(key, value)
+        self.crossings.extend(newer.crossings)
 
     def is_empty(self) -> bool:
-        return not (self.positions or self.hours or self.vessels or self.records)
+        return not (self.positions or self.hours or self.vessels or self.records
+                    or self.sectors or self.crossings)
 
 
 class Store:
@@ -132,10 +189,24 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
-        if self._conn.execute("PRAGMA user_version").fetchone()[0] == 0:
-            self._conn.executescript(f"BEGIN; {SCHEMA} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;")
+        self._migrate()
         # Aparte verbinding voor lookups vanuit de event loop, los van de flush-thread.
         self._read_conn = self._open_reader(check_same_thread=False)
+
+    def _migrate(self) -> None:
+        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            self._conn.close()
+            raise SchemaError(
+                f"{self.path} is gemaakt door een nieuwere versie van aisws (schema {version}, "
+                f"deze versie kent {SCHEMA_VERSION}); werk aisws bij"
+            )
+        if version == 0:
+            steps = FULL_SCHEMA
+        else:
+            steps = "".join(MIGRATIONS[v] for v in range(version + 1, SCHEMA_VERSION + 1))
+        if steps:
+            self._conn.executescript(f"BEGIN; {steps} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;")
 
     def close(self) -> None:
         with self._write_lock:
@@ -223,6 +294,17 @@ class Store:
             )
             for record in batch.records:
                 self._write_record(record)
+            conn.executemany(
+                """INSERT INTO range_sectors VALUES (?, ?, ?, ?)
+                   ON CONFLICT (day_ts, sector) DO UPDATE SET
+                     max_range_m = excluded.max_range_m, mmsi = excluded.mmsi
+                   WHERE excluded.max_range_m > range_sectors.max_range_m""",
+                [(day, sector, distance, mmsi) for (day, sector), (distance, mmsi) in batch.sectors.items()],
+            )
+            conn.executemany(
+                "INSERT INTO gate_crossings VALUES (?, ?, ?)",
+                [(c.ts, c.mmsi, int(c.upstream)) for c in batch.crossings],
+            )
             conn.execute("COMMIT")
         except BaseException:
             conn.execute("ROLLBACK")
@@ -279,6 +361,42 @@ class Store:
         if row is None:
             return None
         return {key: row[column] for key, column in COLUMNS.items() if row[column] is not None}
+
+    # --- back-up ----------------------------------------------------------------
+
+    def backup(self, directory: str | Path, day: date, keep: int) -> Path:
+        """Schrijft ``directory/ais-<dag>.db`` en bewaart de nieuwste ``keep`` back-ups.
+
+        De map wordt niet aangemaakt: een ontkoppelde USB-stick moet een fout
+        geven, niet stilletjes een back-up op de SD-kaart. Het bestand komt eerst
+        onder een tijdelijke naam en wordt pas daarna hernoemd.
+        """
+        directory = Path(directory)
+        if not directory.is_dir():
+            raise BackupError(f"{directory} bestaat niet; is de stick gekoppeld?")
+        target = directory / f"ais-{day.isoformat()}.db"
+        tmp = directory / f".{target.name}.tmp"
+        try:
+            tmp.unlink(missing_ok=True)
+            with closing(sqlite3.connect(f"file:{quote(str(tmp))}", uri=True, isolation_level=None)) as conn:
+                conn.executescript(f"BEGIN; {FULL_SCHEMA} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;")
+                conn.execute("ATTACH DATABASE ? AS src", (f"file:{quote(str(self.path))}?mode=ro",))
+                # Eén transactie: alle tabellen komen uit dezelfde momentopname.
+                conn.execute("BEGIN")
+                for name in BACKUP_TABLES:
+                    conn.execute(f"INSERT INTO main.{name} SELECT * FROM src.{name}")
+                conn.execute("COMMIT")
+                conn.execute("DETACH DATABASE src")
+            os.replace(tmp, target)
+            for old in sorted(p for p in directory.iterdir() if BACKUP_NAME.match(p.name))[:-keep]:
+                old.unlink()
+        except (OSError, sqlite3.Error) as exc:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise BackupError(f"back-up naar {directory} mislukt: {exc}") from exc
+        return target
 
     def size_bytes(self) -> int:
         return sum(

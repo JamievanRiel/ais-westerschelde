@@ -2,8 +2,8 @@ import sqlite3
 
 import pytest
 
-from aisws.store import Store
-from aisws.tracker import HourSample, RangeRecord, TrackPoint, VesselUpdate
+from aisws.store import SCHEMA_VERSION, SchemaError, Store
+from aisws.tracker import GateCrossing, HourSample, RangeRecord, SectorSample, TrackPoint, VesselUpdate
 
 MMSI = 244000001
 
@@ -197,3 +197,74 @@ def test_close_waits_for_a_flush_that_is_still_running(tmp_path):
     worker.join()
     assert result["ok"] is True
     assert store.flush_errors == 0
+
+
+# --- bereik per richting en doorvaart --------------------------------------------
+
+
+def test_sectors_keep_the_farthest_ship_within_and_across_flushes(store):
+    store.add([SectorSample(0, 9, 1, 20_000.0), SectorSample(0, 9, 2, 35_000.0),
+               SectorSample(0, 9, 3, 30_000.0), SectorSample(86_400, 9, 4, 1_000.0)])
+    store.flush()
+    store.add([SectorSample(0, 9, 5, 34_000.0), SectorSample(0, 10, 6, 5_000.0)])
+    store.flush()
+    assert rows(store, "SELECT day_ts, sector, max_range_m, mmsi FROM range_sectors ORDER BY day_ts, sector") == [
+        (0, 9, 35_000.0, 2), (0, 10, 5_000.0, 6), (86_400, 9, 1_000.0, 4),
+    ]
+    store.add([SectorSample(0, 9, 7, 36_000.0)])
+    store.flush()
+    assert rows(store, "SELECT max_range_m, mmsi FROM range_sectors WHERE day_ts = 0 AND sector = 9") == [
+        (36_000.0, 7)
+    ]
+
+
+def test_gate_crossings_are_written(store):
+    store.add([GateCrossing(100, 1, True), GateCrossing(160, 2, False)])
+    store.flush()
+    assert rows(store, "SELECT ts, mmsi, upstream FROM gate_crossings ORDER BY ts") == [(100, 1, 1), (160, 2, 0)]
+
+
+def test_failed_flush_keeps_sectors_and_crossings(tmp_path):
+    store = Store(tmp_path / "ais.db", busy_timeout_s=0)
+    blocker = sqlite3.connect(tmp_path / "ais.db", isolation_level=None)
+    blocker.execute("BEGIN EXCLUSIVE")
+    store.add([SectorSample(0, 1, 1, 9_000.0), GateCrossing(100, 1, True)])
+    assert store.flush() is False
+    store.add([SectorSample(0, 1, 2, 8_000.0), GateCrossing(200, 2, False)])
+    blocker.execute("ROLLBACK")
+    blocker.close()
+    assert store.flush() is True
+    assert rows(store, "SELECT max_range_m, mmsi FROM range_sectors") == [(9_000.0, 1)]
+    assert rows(store, "SELECT ts FROM gate_crossings ORDER BY ts") == [(100,), (200,)]
+    store.close()
+
+
+# --- schemaversies -----------------------------------------------------------------
+
+
+def test_version_1_database_is_migrated_and_keeps_its_data(tmp_path):
+    path = tmp_path / "ais.db"
+    Store(path).close()
+    old = sqlite3.connect(path, isolation_level=None)
+    old.executescript("""
+        DROP TABLE range_sectors; DROP TABLE gate_crossings;
+        INSERT INTO vessels (mmsi, name, first_seen, last_seen) VALUES (7, 'OUD', 1, 2);
+        PRAGMA user_version = 1;
+    """)
+    old.close()
+    store = Store(path)
+    assert rows(store, "PRAGMA user_version") == [(SCHEMA_VERSION,)]
+    assert rows(store, "SELECT name FROM vessels") == [("OUD",)]
+    store.add([SectorSample(0, 1, 7, 1_000.0), GateCrossing(5, 7, True)])
+    assert store.flush()
+    store.close()
+
+
+def test_newer_database_is_refused(tmp_path):
+    path = tmp_path / "ais.db"
+    Store(path).close()
+    conn = sqlite3.connect(path, isolation_level=None)
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+    conn.close()
+    with pytest.raises(SchemaError, match="nieuwere versie"):
+        Store(path)
