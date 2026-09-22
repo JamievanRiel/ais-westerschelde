@@ -87,6 +87,18 @@ def test_missing_directory_is_an_error_and_is_not_created(store, tmp_path):
     assert not missing.exists()
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root mag overal schrijven")
+def test_unwritable_directory_says_so(store, stick):
+    # Zo ziet een ontkoppelde stick eruit: het lege koppelpunt is van root.
+    stick.chmod(0o555)
+    try:
+        with pytest.raises(BackupError, match="niet schrijfbaar"):
+            store.backup(stick, DAY, keep=7)
+    finally:
+        stick.chmod(0o755)
+    assert os.listdir(stick) == []
+
+
 def test_no_half_written_file_is_left_after_a_failure(store, stick, monkeypatch):
     def broken_replace(*args):
         raise OSError("schijf vol")

@@ -127,6 +127,78 @@ In `/api/health` zie je hoe het station draait:
 | `counters.checksum_error` | kapotte regels; veel daarvan betekent een zwak of gestoord signaal |
 | `counters.implausible` | posities die verworpen zijn als onmogelijk (sprong of te ver weg) |
 | `unsupported_types` | berichttypes die binnenkomen maar niet gedecodeerd worden, zoals 4 (walstations) en 21 (boeien) |
+| `backup` | de laatste back-up (`file`, `ts`, `bytes`) of de reden dat hij mislukte (`error`); `null` als de back-up uit staat |
+
+## 6. Back-up op een USB-stick
+
+aisws bewaart de schepen, uurcijfers, records, doorvaarten en het bereik voor
+altijd, op een SD-kaart die dag en nacht schrijft. Een dagelijkse back-up op een
+USB-stick overleeft een kapotte kaart. De tracksporen gaan niet mee: die zijn
+groot en na 30 dagen toch weg. Een back-up is een paar MB per maand.
+
+Steek de stick in en zoek hem op (`sda1` hieronder is een voorbeeld):
+
+```bash
+lsblk -f
+```
+
+Formatteer hem als ext4. **Dit wist de stick.**
+
+```bash
+sudo mkfs.ext4 -L aisws-backup /dev/sda1
+```
+
+Maak het koppelpunt en laat de stick bij het opstarten koppelen. Met `nofail`
+start de Pi ook zonder stick:
+
+```bash
+sudo mkdir -p /mnt/aisws-backup
+echo 'LABEL=aisws-backup /mnt/aisws-backup ext4 defaults,noatime,nofail 0 2' | sudo tee -a /etc/fstab
+sudo systemctl daemon-reload
+sudo mount /mnt/aisws-backup
+sudo chown aisws:aisws /mnt/aisws-backup
+```
+
+De `chown` geldt voor de stick. Het lege koppelpunt eronder blijft van root: zit
+de stick er niet in, dan kan aisws er niet schrijven en meldt het een fout, in
+plaats van de back-up stilletjes op de SD-kaart te zetten.
+
+Zet in `/etc/aisws/config.toml` onder `[storage]`:
+
+```toml
+backup_dir = "/mnt/aisws-backup"
+```
+
+en herstart met `sudo systemctl restart aisws`. Direct na het opstarten maakt
+aisws de back-up van vandaag, daarna elke nacht kort na middernacht. De nieuwste
+7 blijven staan (`backup_keep`). Controleer:
+
+```bash
+ls -l /mnt/aisws-backup
+curl -s localhost:8000/api/health | grep -o '"backup":{[^}]*}'
+```
+
+Een andere map dan `/mnt/aisws-backup` moet de service ook mogen beschrijven.
+Zet die met `sudo systemctl edit aisws` in een aanvulling, dan blijft hij staan
+als `install.sh` de unit bijwerkt:
+
+```ini
+[Service]
+ReadWritePaths=/jouw/map
+```
+
+### Terugzetten
+
+```bash
+sudo systemctl stop aisws
+sudo cp /mnt/aisws-backup/ais-2026-10-01.db /var/lib/aisws/ais.db
+sudo rm -f /var/lib/aisws/ais.db-wal /var/lib/aisws/ais.db-shm
+sudo chown aisws:aisws /var/lib/aisws/ais.db
+sudo systemctl start aisws
+```
+
+Alles is terug behalve de tracksporen: de lijnen achter de schepen beginnen
+opnieuw.
 
 ## Updaten
 
@@ -145,7 +217,8 @@ Je configuratie en database blijven staan.
 | Wel berichten, geen schepen op de kaart | Stationpositie klopt niet: alles valt buiten `max_range_km` | `counters.implausible` loopt op; controleer `[station]` in de config |
 | aisws start niet | Configuratie ongeldig | `journalctl -u aisws -e` noemt de instelling die niet klopt |
 | Log meldt "5 minuten geen AIS-berichten" | Antenne, kabel of dongle | Kijk of `ais-catcher` nog draait; bij een losse dongle helpt een herstart |
-| Weinig bereik | Antenne te laag of te veel kabelverlies | Hoger zetten; kortere of dikkere coax |
+| Weinig bereik | Antenne te laag of te veel kabelverlies | Hoger zetten; kortere of dikkere coax; kijk op de statistiekenpagina bij "Bereik per richting" welke kant het slechtst is |
+| `/api/health` meldt bij `backup` "bestaat niet" of "niet schrijfbaar" | Stick niet gekoppeld, of na het koppelen de `chown` vergeten | `findmnt /mnt/aisws-backup`; `sudo mount /mnt/aisws-backup`. aisws probeert het elk uur opnieuw |
 
 ## Delen
 

@@ -14,7 +14,8 @@ RestartPreventExitStatus=2
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/aisws
+# Het '-' laat de service ook starten als de back-upmap (USB-stick) er niet is.
+ReadWritePaths=/var/lib/aisws -/mnt/aisws-backup
 PrivateTmp=yes
 
 [Install]

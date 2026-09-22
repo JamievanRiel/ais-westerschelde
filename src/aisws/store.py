@@ -378,6 +378,8 @@ class Store:
         directory = Path(directory)
         if not directory.is_dir():
             raise BackupError(f"{directory} bestaat niet; is de stick gekoppeld?")
+        if not os.access(directory, os.W_OK):
+            raise BackupError(f"{directory} is niet schrijfbaar; is de stick gekoppeld en van aisws?")
         target = directory / backup_name(day)
         tmp = directory / f".{target.name}.tmp"
         try:

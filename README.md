@@ -31,19 +31,24 @@ uitgedunde sporen en uur-aggregaten op in SQLite.
 is, op een ondergrond in de kleuren van een papieren zeekaart (of het
 nachtpalet van een kaartscherm, in de donkere modus). Klik op een schip voor
 naam, type, afmetingen, bestemming en het spoor van de laatste 6 of 24 uur.
-Vanaf zoomniveau 12 staan boeien en vaargeulen van OpenSeaMap erop.
+Vanaf zoomniveau 12 staan boeien en vaargeulen van OpenSeaMap erop, en een
+stippellijn markeert de doorvaartlijn bij Vlissingen.
 
 **Statistieken.**
 
 - aantal schepen per uur (48 uur) en per dag (90 dagen)
+- doorvaart bij Vlissingen: per dag hoeveel schepen de Schelde op en af voeren,
+  en per scheepstype
 - drukste momenten van de week, als heatmap van weekdag × uur
 - gemiddelde snelheid per scheepstype
 - grootste schip van de maand, op schaal getekend
 - verste ontvangst ooit, met een lijn vanaf het station op de kaart
+- bereik per richting: per 10° de verste ontvangst rond het station, handig om
+  de antenne te plaatsen
 
 <p>
   <img src="docs/img/kaart-schip-donker.webp" width="49%" alt="Donkere modus: een tanker geselecteerd, met gegevens en spoor">
-  <img src="docs/img/statistieken.webp" width="49%" alt="Statistiekenpagina met verkeer per uur en per dag, heatmap, snelheden en records">
+  <img src="docs/img/statistieken.webp" width="49%" alt="Statistiekenpagina met verkeer, doorvaart, heatmap, snelheden, records en bereik per richting">
 </p>
 
 De schermafbeeldingen tonen verzonnen verkeer uit het voorbeeldbestand en
@@ -87,7 +92,8 @@ minuut:
 ## Op de Raspberry Pi
 
 Zie [docs/pi-setup.md](docs/pi-setup.md): antenne, AIS-catcher, `sudo
-deploy/install.sh`, controleren en problemen oplossen.
+deploy/install.sh`, controleren, back-up op een USB-stick en problemen
+oplossen.
 
 ## Hoe het werkt
 
@@ -97,9 +103,10 @@ deploy/install.sh`, controleren en problemen oplossen.
 | `assembler.py` | berichten over meerdere zinnen samenvoegen (time-out 2 s) |
 | `bits.py` | 6-bit-payload uitpakken; velden als uint, signed int en 6-bit-tekst |
 | `messages.py` | types 1/2/3, 5, 18, 19 en 24 decoderen |
-| `tracker.py` | live toestand, sporen uitdunnen, onmogelijke posities weren, records |
-| `store.py` | SQLite (WAL): gebufferd wegschrijven, opschonen, herstel na herstart |
-| `stats.py` | de vijf statistieken, in lokale tijd (ook rond de zomertijdwissel) |
+| `tracker.py` | live toestand, sporen uitdunnen, onmogelijke posities weren, records, richting en doorvaart |
+| `store.py` | SQLite (WAL): gebufferd wegschrijven, opschonen, herstel na herstart, back-up |
+| `backup.py` | wanneer de dagelijkse back-up draait, en hoe die ging |
+| `stats.py` | de statistieken, in lokale tijd (ook rond de zomertijdwissel) |
 | `ingest.py`, `hub.py`, `web.py` | UDP-listener, WebSocket-updates, FastAPI |
 
 Decoder, tracker en statistieken bevatten geen I/O en zijn los te testen. Alles
@@ -119,6 +126,14 @@ Een paar keuzes:
 - **Snelheid per type** telt hoogstens één meting per schip per 30 s. Klasse A
   zendt vaker naarmate een schip harder vaart, dus zonder die grens trekken
   snelle schepen het gemiddelde omhoog.
+- **Doorvaart** telt een schip als het stuk tussen twee gecontroleerde posities
+  de lijn snijdt en het schip minstens 1 knoop vaart; ankerliggers met GPS-ruis
+  tellen zo niet mee. De lijn staat in `config.toml` onder `[gate]` en telt alles
+  wat voorbij Vlissingen vaart, dus ook naar Vlissingen-Oost en Terneuzen.
+- **Back-up.** Elke dag kopieert aisws alles behalve de tracksporen naar
+  `backup_dir`, bijvoorbeeld een USB-stick; een half geschreven back-up bestaat
+  nooit (eerst een tijdelijke naam, dan hernoemen). Zie
+  [docs/pi-setup.md](docs/pi-setup.md).
 - **Drie kleuren op de kaart** (vracht, tanker, passagiers), de rest grijs. Met
   meer kleuren door elkaar zijn niet alle paren meer te onderscheiden voor
   kleurenblinde lezers. Het precieze type staat in de lijst.
@@ -129,7 +144,7 @@ Een paar keuzes:
 .venv/bin/pytest
 ```
 
-Ruim 200 tests, zonder SDR of netwerk. De decoder wordt gecontroleerd met
+Ruim 250 tests, zonder SDR of netwerk. De decoder wordt gecontroleerd met
 gepubliceerde voorbeeldberichten uit de gpsd-documentatie. Types 19 en 24
 worden gecontroleerd met berichten die veld voor veld zijn opgebouwd volgens
 ITU-R M.1371-5 (`tools/aisenc.py`). Een end-to-end-test speelt het
@@ -143,7 +158,9 @@ voorbeeldbestand via UDP af tegen de echte app.
 | `GET /api/vessels/{mmsi}` | details van één schip |
 | `GET /api/vessels/{mmsi}/track?hours=6` | uitgedund spoor |
 | `GET /api/stats/hourly`, `/daily`, `/speed`, `/heatmap`, `/largest`, `/range` | statistieken |
-| `GET /api/health` | berichten per minuut, foutentellers, databasegrootte |
+| `GET /api/stats/passages?days=90` | doorvaart per dag, vandaag en per type |
+| `GET /api/stats/coverage?period=30d` | verste ontvangst per richting (`7d`, `30d`, `all`) |
+| `GET /api/health` | berichten per minuut, foutentellers, databasegrootte, laatste back-up |
 | `WS /ws` | snapshot bij verbinden, daarna elke seconde de wijzigingen |
 
 ## Stand van zaken
@@ -153,6 +170,7 @@ voorbeeldbestand via UDP af tegen de echte app.
 - [x] Backend die NMEA decodeert en opslaat
 - [x] Live kaart met MapLibre
 - [x] Statistiekenpagina
+- [x] Doorvaart bij Vlissingen, bereik per richting en dagelijkse back-up
 - [ ] Foto's van de opstelling in deze README
 
 ## Met dank aan

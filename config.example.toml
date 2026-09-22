@@ -29,6 +29,20 @@ flush_interval_s = 5
 positions_retention_days = 30
 cleanup_hour_local = 4
 max_pending_writes = 10000
+# Dagelijkse back-up van alles behalve de tracksporen; leeg = uit.
+# Voor een USB-stick: docs/pi-setup.md, "Back-up op een USB-stick".
+backup_dir = ""                  # bv. "/mnt/aisws-backup"
+backup_keep = 7                  # zoveel dagen blijven bewaard
+
+[gate]
+# Doorvaartlijn over de Schelde. Punt 1 op de noordoever, punt 2 op de zuidoever:
+# wie van west naar oost kruist, vaart de Schelde op. Standaard oost van Vlissingen
+# en de veerroute naar Breskens (Ritthem – Hoofdplaat).
+name = "Vlissingen"
+lat1 = 51.458
+lon1 = 3.640
+lat2 = 51.380
+lon2 = 3.640
 
 [web]
 host = "0.0.0.0"
