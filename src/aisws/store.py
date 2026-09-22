@@ -79,6 +79,10 @@ BACKUP_TABLES = ("vessels", "vessel_hours", "range_records", "range_sectors", "g
 BACKUP_NAME = re.compile(r"^ais-\d{4}-\d{2}-\d{2}\.db$")
 
 
+def backup_name(day: date) -> str:
+    return f"ais-{day.isoformat()}.db"
+
+
 class SchemaError(RuntimeError):
     pass
 
@@ -374,7 +378,7 @@ class Store:
         directory = Path(directory)
         if not directory.is_dir():
             raise BackupError(f"{directory} bestaat niet; is de stick gekoppeld?")
-        target = directory / f"ais-{day.isoformat()}.db"
+        target = directory / backup_name(day)
         tmp = directory / f".{target.name}.tmp"
         try:
             tmp.unlink(missing_ok=True)

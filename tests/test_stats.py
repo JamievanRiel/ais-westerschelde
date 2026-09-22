@@ -37,11 +37,18 @@ def db(tmp_path):
     def record(ts, mmsi, lat, lon, distance_m):
         conn.execute("INSERT INTO range_records VALUES (?, ?, ?, ?, ?)", (ts, mmsi, lat, lon, distance_m))
 
+    def sector(day_ts, sector, max_range_m, mmsi):
+        conn.execute("INSERT INTO range_sectors VALUES (?, ?, ?, ?)", (day_ts, sector, max_range_m, mmsi))
+
+    def crossing(ts, mmsi, upstream):
+        conn.execute("INSERT INTO gate_crossings VALUES (?, ?, ?)", (ts, mmsi, int(upstream)))
+
     class Db:
         pass
 
     helpers = Db()
     helpers.hours, helpers.vessel, helpers.record = hours, vessel, record
+    helpers.sector, helpers.crossing = sector, crossing
     with store.reader() as reader:
         helpers.reader = reader
         yield helpers
@@ -190,3 +197,79 @@ def test_heatmap_ignores_the_hour_that_is_still_running(db):
     db.hours((utc(2026, 9, 14, 12), 1), (utc(2026, 9, 14, 12), 2), (utc(2026, 9, 21, 12), 3))
     result = stats.heatmap(db.reader, TZ, now=now, weeks=2)
     assert result["cells"][0][14] == 2.0
+
+
+# --- bereik per richting ---------------------------------------------------------
+
+
+def test_coverage_per_period_with_the_ship_that_set_it(db):
+    db.vessel(7, "DICHTBIJ", 70)
+    db.vessel(8, "VERDER", 70)
+    db.sector(utc(2026, 9, 22), 9, 30_000.0, 7)
+    db.sector(utc(2026, 9, 10), 9, 40_000.0, 8)
+    db.sector(utc(2026, 1, 1), 27, 80_000.0, 9)
+    now = utc(2026, 9, 22, 12)
+
+    week = stats.coverage(db.reader, now, "7d")
+    assert len(week) == 36
+    assert week[9] == {"sector": 9, "from_deg": 90, "max_km": 30.0, "mmsi": 7, "name": "DICHTBIJ"}
+    assert week[27] == {"sector": 27, "from_deg": 270, "max_km": None, "mmsi": None, "name": None}
+
+    assert stats.coverage(db.reader, now, "30d")[9]["mmsi"] == 8
+    everything = stats.coverage(db.reader, now, "all")
+    assert (everything[27]["max_km"], everything[27]["name"]) == (80.0, None)
+
+
+def test_coverage_counts_whole_utc_days(db):
+    # 7 dagen terug vanaf 22 sep 12:00 is 15 sep 12:00; de hele dag 15 sep telt mee.
+    db.sector(utc(2026, 9, 15), 0, 1_000.0, 7)
+    db.sector(utc(2026, 9, 14), 1, 1_000.0, 7)
+    week = stats.coverage(db.reader, utc(2026, 9, 22, 12), "7d")
+    assert (week[0]["max_km"], week[1]["max_km"]) == (1.0, None)
+
+
+def test_coverage_rejects_unknown_periods(db):
+    with pytest.raises(ValueError):
+        stats.coverage(db.reader, utc(2026, 9, 22), "1j")
+
+
+# --- doorvaart --------------------------------------------------------------------
+
+
+def test_passages_per_local_day_across_the_dst_change(db):
+    db.vessel(7, "VRACHT", 70)
+    db.vessel(8, "TANK", 80)
+    db.crossing(utc(2026, 10, 24, 22, 30), 7, True)   # 25 okt 00:30 zomertijd
+    db.crossing(utc(2026, 10, 25, 22, 30), 8, False)  # 25 okt 23:30 wintertijd
+    db.crossing(utc(2026, 10, 25, 23, 30), 7, False)  # 26 okt 00:30 wintertijd
+    db.crossing(utc(2026, 10, 26, 9), 9, True)        # onbekend schip, vandaag
+    result = stats.passages(db.reader, TZ, now=utc(2026, 10, 26, 12), days=3)
+    assert result["days"] == [
+        {"date": "2026-10-24", "up": 0, "down": 0},
+        {"date": "2026-10-25", "up": 1, "down": 1},
+        {"date": "2026-10-26", "up": 1, "down": 1},
+    ]
+    assert result["today"] == {"up": 1, "down": 1}
+    assert result["by_type"] == [
+        {"type_group": "cargo", "up": 1, "down": 1},
+        {"type_group": "tanker", "up": 0, "down": 1},
+        {"type_group": "unknown", "up": 1, "down": 0},
+    ]
+
+
+def test_passages_by_type_covers_the_last_30_days(db):
+    db.vessel(7, "VRACHT", 70)
+    db.crossing(utc(2026, 8, 1), 7, True)
+    db.crossing(utc(2026, 9, 21), 7, True)
+    result = stats.passages(db.reader, TZ, now=utc(2026, 9, 22, 12), days=90)
+    assert sum(day["up"] for day in result["days"]) == 2
+    assert result["by_type"] == [{"type_group": "cargo", "up": 1, "down": 0}]
+
+
+def test_passages_without_crossings(db):
+    result = stats.passages(db.reader, TZ, now=utc(2026, 9, 22, 12), days=2)
+    assert result == {
+        "days": [{"date": "2026-09-21", "up": 0, "down": 0}, {"date": "2026-09-22", "up": 0, "down": 0}],
+        "today": {"up": 0, "down": 0},
+        "by_type": [],
+    }

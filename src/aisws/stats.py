@@ -12,9 +12,11 @@ from zoneinfo import ZoneInfo
 
 from aisws.geo import METERS_PER_NM
 from aisws.shiptypes import type_group
+from aisws.tracker import DAY_S, SECTOR_DEG
 
 HOUR = 3600
 PERIODS = {"7d": 7 * 86400, "30d": 30 * 86400, "all": None}
+PASSAGES_BY_TYPE_DAYS = 30
 MIN_LENGTH_M, MAX_LENGTH_M = 1, 460
 
 
@@ -177,3 +179,70 @@ def range_records(conn: sqlite3.Connection) -> dict[str, Any]:
     distances = [row[4] for row in rows]
     record = history[distances.index(max(distances))] if rows else None
     return {"record": record, "history": history}
+
+
+def coverage(conn: sqlite3.Connection, now: int, period: str = "30d") -> list[dict[str, Any]]:
+    """Verste gecontroleerde ontvangst per richting van 10° vanaf het station.
+
+    Altijd 36 sectoren, met ``None`` waar niets ontvangen is. Een periode telt
+    in hele UTC-dagen, zo zijn de sectoren opgeslagen.
+    """
+    if period not in PERIODS:
+        raise ValueError(f"onbekende periode {period!r}")
+    window = PERIODS[period]
+    since = 0 if window is None else (now - window) - (now - window) % DAY_S
+    # Bij max() geeft SQLite de overige kolommen van de rij met het maximum.
+    rows = conn.execute(
+        """SELECT s.sector, max(s.max_range_m), s.mmsi, v.name
+           FROM range_sectors s LEFT JOIN vessels v ON v.mmsi = s.mmsi
+           WHERE s.day_ts >= ?
+           GROUP BY s.sector""",
+        (since,),
+    ).fetchall()
+    found = {sector: (distance, mmsi, name) for sector, distance, mmsi, name in rows}
+    result = []
+    for sector in range(360 // SECTOR_DEG):
+        distance, mmsi, name = found.get(sector, (None, None, None))
+        result.append({
+            "sector": sector,
+            "from_deg": sector * SECTOR_DEG,
+            "max_km": None if distance is None else round(distance / 1000, 2),
+            "mmsi": mmsi,
+            "name": name,
+        })
+    return result
+
+
+def passages(conn: sqlite3.Connection, tz: ZoneInfo, now: int, days: int = 90) -> dict[str, Any]:
+    """Kruisingen van de doorvaartlijn: per lokale dag, vandaag, en per type over 30 dagen."""
+    today = _local_date(now, tz)
+    start = _local_midnight(today - timedelta(days=days - 1), tz)
+    per_day: dict[date, dict[str, int]] = {}
+    for ts, upstream in conn.execute("SELECT ts, upstream FROM gate_crossings WHERE ts >= ?", (start,)):
+        counts = per_day.setdefault(_local_date(ts, tz), {"up": 0, "down": 0})
+        counts["up" if upstream else "down"] += 1
+
+    since = _local_midnight(today - timedelta(days=PASSAGES_BY_TYPE_DAYS - 1), tz)
+    groups: dict[str, dict[str, int]] = {}
+    for ship_type, upstream, count in conn.execute(
+        """SELECT v.ship_type, c.upstream, count(*)
+           FROM gate_crossings c LEFT JOIN vessels v ON v.mmsi = c.mmsi
+           WHERE c.ts >= ?
+           GROUP BY v.ship_type, c.upstream""",
+        (since,),
+    ):
+        counts = groups.setdefault(type_group(ship_type), {"up": 0, "down": 0})
+        counts["up" if upstream else "down"] += count
+
+    empty = {"up": 0, "down": 0}
+    return {
+        "days": [
+            {"date": day.isoformat(), **per_day.get(day, empty)}
+            for day in (today - timedelta(days=offset) for offset in range(days - 1, -1, -1))
+        ],
+        "today": dict(per_day.get(today, empty)),
+        "by_type": sorted(
+            ({"type_group": name, **counts} for name, counts in groups.items()),
+            key=lambda row: (-(row["up"] + row["down"]), row["type_group"]),
+        ),
+    }

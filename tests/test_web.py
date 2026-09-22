@@ -16,11 +16,11 @@ STATIC = aisenc.sentences(
 )
 
 
-def make_config(tmp_path):
+def make_config(tmp_path, **storage):
     return parse_config({
         "station": {"name": "Test", "lat": 51.44, "lon": 3.58},
         "ingest": {"udp_port": 0},
-        "storage": {"db_path": str(tmp_path / "ais.db"), "flush_interval_s": 0.05},
+        "storage": {"db_path": str(tmp_path / "ais.db"), "flush_interval_s": 0.05, **storage},
         "web": {"ws_update_interval_s": 0.05},
     })
 
@@ -46,8 +46,11 @@ def wait_for(fetch, timeout=3.0):
     raise AssertionError("timeout")
 
 
-def test_config_exposes_the_station(client):
-    assert client.get("/api/config").json() == {"station": {"name": "Test", "lat": 51.44, "lon": 3.58}}
+def test_config_exposes_the_station_and_the_gate(client):
+    assert client.get("/api/config").json() == {
+        "station": {"name": "Test", "lat": 51.44, "lon": 3.58},
+        "gate": {"name": "Vlissingen", "lat1": 51.458, "lon1": 3.640, "lat2": 51.380, "lon2": 3.640},
+    }
 
 
 def test_udp_position_shows_up_as_live_vessel(client):
@@ -107,6 +110,27 @@ def test_statistics_reflect_received_data(client):
 def test_invalid_statistics_parameters_are_rejected(client):
     assert client.get("/api/stats/speed?period=1y").status_code == 422
     assert client.get("/api/stats/hourly?hours=0").status_code == 422
+    assert client.get("/api/stats/coverage?period=1y").status_code == 422
+    assert client.get("/api/stats/passages?days=0").status_code == 422
+    assert client.get("/api/stats/passages?days=366").status_code == 422
+
+
+def test_ship_crossing_the_gate_is_counted_and_sets_the_coverage(tmp_path):
+    # Een nepklok: twee posities 30 s na elkaar, anders keurt de tracker de sprong af.
+    now = [time.time()]
+    with TestClient(create_app(make_config(tmp_path), clock=lambda: now[0])) as client:
+        send(client, aisenc.sentences(aisenc.type1(MMSI, 51.42, 3.638, 10.0, 90.0, 90, 0))[0])
+        wait_for(lambda: client.get("/api/vessels").json())
+        now[0] += 30
+        send(client, aisenc.sentences(aisenc.type1(MMSI, 51.42, 3.642, 10.0, 90.0, 90, 0))[0])
+        passages = wait_for(lambda: (p := client.get("/api/stats/passages?days=1").json())["today"]["up"] and p)
+        assert passages["today"] == {"up": 1, "down": 0}
+        assert passages["gate"]["name"] == "Vlissingen"
+        coverage = client.get("/api/stats/coverage?period=7d").json()
+        assert coverage["station"] == {"lat": 51.44, "lon": 3.58}
+        [sector] = [s for s in coverage["sectors"] if s["max_km"] is not None]
+        # (51.42, 3.642) ligt vanaf het station op ~117° en ~4,8 km.
+        assert (sector["sector"], sector["max_km"]) == (11, pytest.approx(4.8, abs=0.1))
 
 
 def test_health_reports_counters(client):
@@ -118,6 +142,26 @@ def test_health_reports_counters(client):
     assert health["messages_last_min"] == 2
     assert health["last_message_age_s"] < 5
     assert health["db_size_bytes"] > 0
+
+
+def test_backup_is_off_by_default(client):
+    assert client.get("/api/health").json()["backup"] is None
+
+
+def test_backup_is_made_right_after_startup(tmp_path):
+    stick = tmp_path / "stick"
+    stick.mkdir()
+    with TestClient(create_app(make_config(tmp_path, backup_dir=str(stick)))) as client:
+        backup = wait_for(lambda: client.get("/api/health").json()["backup"]["file"])
+        assert (stick / backup).exists()
+        assert client.get("/api/health").json()["backup"]["error"] is None
+
+
+def test_failed_backup_shows_up_in_health(tmp_path):
+    config = make_config(tmp_path, backup_dir=str(tmp_path / "niet-gekoppeld"))
+    with TestClient(create_app(config)) as client:
+        error = wait_for(lambda: client.get("/api/health").json()["backup"]["error"])
+        assert "stick" in error
 
 
 def test_restart_restores_live_vessels_and_record(tmp_path):

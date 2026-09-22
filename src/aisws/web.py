@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from aisws import stats
 from aisws.assembler import Assembler
+from aisws.backup import BackupJob
 from aisws.config import Config
 from aisws.hub import Hub
 from aisws.ingest import Pipeline, SilenceMonitor, UdpProtocol
@@ -44,7 +45,8 @@ def create_app(config: Config, clock: Callable[[], float] = time.time) -> FastAP
     async def lifespan(app: FastAPI):
         store = Store(config.storage.db_path, max_pending_writes=config.storage.max_pending_writes)
         tracker = Tracker(
-            config.tracker, config.station.lat, config.station.lon, static_lookup=store.lookup_static
+            config.tracker, config.station.lat, config.station.lon,
+            static_lookup=store.lookup_static, gate=config.gate,
         )
         started = clock()
         tracker.restore(store.load_live(since_ts=int(started - config.tracker.stale_after_s)),
@@ -54,6 +56,10 @@ def create_app(config: Config, clock: Callable[[], float] = time.time) -> FastAP
         hub = Hub(tracker)
         silence = SilenceMonitor()
         last_cleanup: list[Any] = [None]
+        backup = (
+            BackupJob(store, config.storage.backup_dir, config.storage.backup_keep, tz)
+            if config.storage.backup_dir else None
+        )
 
         loop = asyncio.get_running_loop()
         transport, _ = await loop.create_datagram_endpoint(
@@ -62,7 +68,7 @@ def create_app(config: Config, clock: Callable[[], float] = time.time) -> FastAP
         )
         app.state.udp_port = transport.get_extra_info("sockname")[1]
         app.state.store, app.state.tracker, app.state.hub = store, tracker, hub
-        app.state.pipeline, app.state.started = pipeline, started
+        app.state.pipeline, app.state.started, app.state.backup = pipeline, started, backup
         log.info("luistert naar AIS-catcher op udp://%s:%d", config.ingest.udp_host, app.state.udp_port)
 
         async def live_job() -> None:
@@ -83,6 +89,8 @@ def create_app(config: Config, clock: Callable[[], float] = time.time) -> FastAP
                 cutoff = int(clock()) - config.storage.positions_retention_days * 86400
                 deleted = await asyncio.to_thread(store.cleanup, cutoff)
                 log.info("%d oude posities opgeruimd", deleted)
+            if backup is not None and backup.due(clock()):
+                await asyncio.to_thread(backup.run, clock())
 
         tasks = [
             asyncio.create_task(_every(config.web.ws_update_interval_s, live_job)),
@@ -120,10 +128,16 @@ def create_app(config: Config, clock: Callable[[], float] = time.time) -> FastAP
 
     # --- live ----------------------------------------------------------------
 
+    def gate() -> dict[str, Any]:
+        g = config.gate
+        return {"name": g.name, "lat1": g.lat1, "lon1": g.lon1, "lat2": g.lat2, "lon2": g.lon2}
+
+    def station() -> dict[str, float]:
+        return {"lat": config.station.lat, "lon": config.station.lon}
+
     @app.get("/api/config")
     async def get_config() -> dict[str, Any]:
-        station = config.station
-        return {"station": {"name": station.name, "lat": station.lat, "lon": station.lon}}
+        return {"station": {"name": config.station.name, **station()}, "gate": gate()}
 
     @app.get("/api/vessels")
     async def vessels() -> list[dict[str, Any]]:
@@ -184,8 +198,16 @@ def create_app(config: Config, clock: Callable[[], float] = time.time) -> FastAP
     @app.get("/api/stats/range")
     def stats_range() -> dict[str, Any]:
         result = read(stats.range_records)
-        result["station"] = {"lat": config.station.lat, "lon": config.station.lon}
+        result["station"] = station()
         return result
+
+    @app.get("/api/stats/coverage")
+    def stats_coverage(period: Literal["7d", "30d", "all"] = "30d") -> dict[str, Any]:
+        return {"sectors": read(stats.coverage, now(), period), "station": station()}
+
+    @app.get("/api/stats/passages")
+    def stats_passages(days: int = Query(90, ge=1, le=365)) -> dict[str, Any]:
+        return {**read(stats.passages, tz, now(), days), "gate": gate()}
 
     # --- monitoring -------------------------------------------------------------
 
@@ -209,6 +231,7 @@ def create_app(config: Config, clock: Callable[[], float] = time.time) -> FastAP
             "counters": counters,
             "unsupported_types": {str(k): v for k, v in sorted(state.pipeline.unsupported_types.items())},
             "db_size_bytes": state.store.size_bytes(),
+            "backup": state.backup.status() if state.backup is not None else None,
         }
 
     @app.websocket("/ws")

@@ -1,9 +1,11 @@
 import os
 import sqlite3
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
+from aisws.backup import BackupJob
 from aisws.store import SCHEMA_VERSION, BackupError, Store
 from aisws.tracker import GateCrossing, HourSample, RangeRecord, SectorSample, TrackPoint, VesselUpdate
 
@@ -93,3 +95,36 @@ def test_no_half_written_file_is_left_after_a_failure(store, stick, monkeypatch)
     with pytest.raises(BackupError, match="schijf vol"):
         store.backup(stick, DAY, keep=7)
     assert os.listdir(stick) == []
+
+
+# --- planning ----------------------------------------------------------------------
+
+TZ = ZoneInfo("Europe/Amsterdam")
+NIGHT = datetime(2026, 10, 1, 0, 5, tzinfo=TZ).timestamp()  # 1 okt 00:05 lokaal
+
+
+def test_backup_is_due_once_per_local_day(store, stick):
+    job = BackupJob(store, str(stick), keep=7, tz=TZ)
+    assert job.status() == {"file": None, "ts": None, "bytes": None, "error": None}
+    assert job.due(NIGHT)
+    job.run(NIGHT)
+    status = job.status()
+    assert (status["file"], status["ts"], status["error"]) == ("ais-2026-10-01.db", int(NIGHT), None)
+    assert status["bytes"] > 0
+    assert not job.due(NIGHT + 60)
+    assert not job.due(NIGHT + 23 * 3600)        # 1 okt 23:05
+    assert job.due(NIGHT + 24 * 3600)            # 2 okt 00:05
+
+
+def test_failed_backup_is_retried_an_hour_later(store, tmp_path):
+    job = BackupJob(store, str(tmp_path / "niet-gekoppeld"), keep=7, tz=TZ)
+    job.run(NIGHT)
+    assert "stick" in job.status()["error"]
+    assert job.status()["file"] is None
+    assert not job.due(NIGHT + 3599)
+    assert job.due(NIGHT + 3600)
+
+
+def test_existing_backup_of_today_is_not_redone_after_a_restart(store, stick):
+    BackupJob(store, str(stick), keep=7, tz=TZ).run(NIGHT)
+    assert not BackupJob(store, str(stick), keep=7, tz=TZ).due(NIGHT + 600)
