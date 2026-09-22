@@ -15,6 +15,15 @@ def test_minimal_config_uses_defaults():
     assert config.web.port == 8000
 
 
+def test_gate_and_backup_defaults():
+    config = parse_config(STATION)
+    gate = config.gate
+    assert gate.name == "Vlissingen"
+    assert (gate.lat1, gate.lon1, gate.lat2, gate.lon2) == (51.458, 3.640, 51.380, 3.640)
+    assert config.storage.backup_dir == ""
+    assert config.storage.backup_keep == 7
+
+
 def test_values_override_defaults():
     config = parse_config({**STATION, "web": {"port": 9000}, "tracker": {"max_range_km": 250}})
     assert config.web.port == 9000
@@ -39,6 +48,10 @@ def test_integers_are_accepted_for_float_settings():
         ({**STATION, "web": {"poort": 8000}}, "web.poort"),
         ({**STATION, "webb": {}}, "webb"),
         ({"station": {"lat": 51.4, "lon": 3.5, "timezone": "Europe/Vlissingen"}}, "timezone"),
+        ({**STATION, "gate": {"lat1": 95.0}}, "gate.lat1: moet tussen"),
+        ({**STATION, "gate": {"lon2": -200.0}}, "gate.lon2: moet tussen"),
+        ({**STATION, "gate": {"lat1": 51.4, "lon1": 3.6, "lat2": 51.4, "lon2": 3.6}}, "gate: punt 1 en punt 2"),
+        ({**STATION, "storage": {"backup_keep": 0}}, "storage.backup_keep: minstens 1"),
     ],
 )
 def test_invalid_config_is_rejected_with_a_clear_message(data, fragment):

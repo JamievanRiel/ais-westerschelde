@@ -7,14 +7,17 @@ worden apart verzameld en met ``drain_changes`` opgehaald.
 
 from collections.abc import Callable
 from dataclasses import dataclass, fields
+from math import cos, radians
 from typing import Any
 
-from aisws.config import TrackerConfig
-from aisws.geo import MPS_PER_KNOT, haversine_m
+from aisws.config import GateConfig, TrackerConfig
+from aisws.geo import MPS_PER_KNOT, bearing_deg, haversine_m
 from aisws.messages import PositionReport, StaticData
 from aisws.shiptypes import type_group
 
 FORGET_AFTER_S = 86_400
+DAY_S = 86_400
+SECTOR_DEG = 10
 JITTER_M = 100.0
 MAX_REJECTIONS = 3
 
@@ -58,7 +61,24 @@ class RangeRecord:
     distance_m: float
 
 
-Event = VesselUpdate | TrackPoint | HourSample | RangeRecord
+@dataclass(frozen=True)
+class SectorSample:
+    """Afstand van een gecontroleerde positie, per UTC-dag en richting vanaf het station."""
+
+    day_ts: int
+    sector: int  # 0..35, sector 0 = 0–10°
+    mmsi: int
+    distance_m: float
+
+
+@dataclass(frozen=True)
+class GateCrossing:
+    ts: int
+    mmsi: int
+    upstream: bool  # True = de Schelde op
+
+
+Event = VesselUpdate | TrackPoint | HourSample | RangeRecord | SectorSample | GateCrossing
 
 
 @dataclass
@@ -119,6 +139,11 @@ def _angle_diff(a: float, b: float) -> float:
     return min(diff, 360 - diff)
 
 
+def _cross(o: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Kruisproduct (a − o) × (b − o): positief als b links ligt van de lijn o → a."""
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+
 class Tracker:
     def __init__(
         self,
@@ -126,10 +151,15 @@ class Tracker:
         station_lat: float,
         station_lon: float,
         static_lookup: Callable[[int], dict[str, Any] | None] | None = None,
+        gate: GateConfig | None = None,
     ) -> None:
         self.config = config
         self.station = (station_lat, station_lon)
         self.static_lookup = static_lookup
+        self.gate = gate
+        # Vlak met x = lon · cos(breedte), zodat de lijn over korte afstand recht blijft.
+        self._scale = cos(radians((gate.lat1 + gate.lat2) / 2)) if gate else 1.0
+        self._gate_points = (self._xy(gate.lat1, gate.lon1), self._xy(gate.lat2, gate.lon2)) if gate else None
         self.record: RangeRecord | None = None
         self.implausible = 0
         self._vessels: dict[int, VesselState] = {}
@@ -169,6 +199,7 @@ class Tracker:
             return []
 
         state = self._state(report.mmsi, report.ais_class, now)
+        previous = (state.lat, state.lon)
         speed_checked = False
         if state.position_ts is not None and now - state.position_ts <= cfg.stale_after_s:
             moved = haversine_m(state.lat, state.lon, report.lat, report.lon)
@@ -211,10 +242,37 @@ class Tracker:
             state.last_speed_sample_ts = now
         events.append(HourSample(ts - ts % 3600, state.mmsi, speed, distance))
 
-        if speed_checked and (self.record is None or distance > self.record.distance_m):
-            self.record = RangeRecord(ts, state.mmsi, report.lat, report.lon, distance)
-            events.append(self.record)
+        if speed_checked:
+            sector = int(bearing_deg(*self.station, report.lat, report.lon) // SECTOR_DEG) % (360 // SECTOR_DEG)
+            events.append(SectorSample(ts - ts % DAY_S, sector, state.mmsi, distance))
+            if report.sog is not None and report.sog >= cfg.moving_sog_kn:
+                upstream = self._gate_crossing(previous, (report.lat, report.lon))
+                if upstream is not None:
+                    events.append(GateCrossing(ts, state.mmsi, upstream))
+            if self.record is None or distance > self.record.distance_m:
+                self.record = RangeRecord(ts, state.mmsi, report.lat, report.lon, distance)
+                events.append(self.record)
         return events
+
+    def _xy(self, lat: float, lon: float) -> tuple[float, float]:
+        return lon * self._scale, lat
+
+    def _gate_crossing(self, before: tuple[float, float], after: tuple[float, float]) -> bool | None:
+        """True = de Schelde op (van rechts naar links over de lijn), False = af, None = niet gekruist.
+
+        Een punt precies op de lijn telt als rechts, zodat een schip dat erop
+        belandt en doorvaart één keer telt.
+        """
+        if self._gate_points is None:
+            return None
+        p1, p2 = self._gate_points
+        a, b = self._xy(*before), self._xy(*after)
+        left_before, left_after = _cross(p1, p2, a) > 0, _cross(p1, p2, b) > 0
+        if left_before == left_after:
+            return None
+        if _cross(a, b, p1) * _cross(a, b, p2) > 0:  # de lijn ligt helemaal naast het stuk
+            return None
+        return left_after
 
     def _wants_track_point(self, state: VesselState, now: float) -> bool:
         cfg = self.config

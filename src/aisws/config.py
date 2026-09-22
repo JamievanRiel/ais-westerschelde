@@ -46,6 +46,23 @@ class StorageConfig:
     positions_retention_days: int = 30
     cleanup_hour_local: int = 4
     max_pending_writes: int = 10000
+    backup_dir: str = ""
+    backup_keep: int = 7
+
+
+@dataclass(frozen=True)
+class GateConfig:
+    """Doorvaartlijn: punt 1 op de noordoever, punt 2 op de zuidoever.
+
+    Wie van rechts naar links kruist (gezien van punt 1 naar punt 2), vaart de
+    Schelde op; met punt 1 noord en punt 2 zuid is dat van west naar oost.
+    """
+
+    name: str = "Vlissingen"
+    lat1: float = 51.458
+    lon1: float = 3.640
+    lat2: float = 51.380
+    lon2: float = 3.640
 
 
 @dataclass(frozen=True)
@@ -61,6 +78,7 @@ class Config:
     ingest: IngestConfig = field(default_factory=IngestConfig)
     tracker: TrackerConfig = field(default_factory=TrackerConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    gate: GateConfig = field(default_factory=GateConfig)
     web: WebConfig = field(default_factory=WebConfig)
 
 
@@ -117,6 +135,17 @@ def _validate(config: Config) -> None:
         ZoneInfo(station.timezone)
     except (ZoneInfoNotFoundError, ValueError):
         raise ConfigError(f"station.timezone: onbekende tijdzone {station.timezone!r}") from None
+    gate = config.gate
+    for name in ("lat1", "lat2"):
+        if not -90 <= getattr(gate, name) <= 90:
+            raise ConfigError(f"gate.{name}: moet tussen -90 en 90 liggen")
+    for name in ("lon1", "lon2"):
+        if not -180 <= getattr(gate, name) <= 180:
+            raise ConfigError(f"gate.{name}: moet tussen -180 en 180 liggen")
+    if (gate.lat1, gate.lon1) == (gate.lat2, gate.lon2):
+        raise ConfigError("gate: punt 1 en punt 2 liggen op dezelfde plek")
+    if config.storage.backup_keep < 1:
+        raise ConfigError("storage.backup_keep: minstens 1")
 
 
 def load_config(path: str | Path) -> Config:

@@ -1,8 +1,16 @@
 import pytest
 
-from aisws.config import TrackerConfig
+from aisws.config import GateConfig, TrackerConfig
 from aisws.messages import PositionReport, StaticData
-from aisws.tracker import HourSample, RangeRecord, TrackPoint, Tracker, VesselUpdate
+from aisws.tracker import (
+    GateCrossing,
+    HourSample,
+    RangeRecord,
+    SectorSample,
+    TrackPoint,
+    Tracker,
+    VesselUpdate,
+)
 
 STATION = (51.44, 3.58)
 MMSI = 244000001
@@ -12,8 +20,8 @@ def pos(lat=51.40, lon=3.60, sog=10.0, cog=90.0, heading=90, nav_status=0, mmsi=
     return PositionReport(1, mmsi, lat, lon, sog, cog, heading, nav_status, "A")
 
 
-def tracker(static_lookup=None, **overrides):
-    return Tracker(TrackerConfig(**overrides), *STATION, static_lookup=static_lookup)
+def tracker(static_lookup=None, gate=None, **overrides):
+    return Tracker(TrackerConfig(**overrides), *STATION, static_lookup=static_lookup, gate=gate)
 
 
 def of_type(events, cls):
@@ -282,3 +290,72 @@ def test_restored_ships_are_live_and_speed_checked():
     assert t.live_vessels()[0]["name"] == "HERSTELD"
     assert t.record.distance_m == 67_000.0
     assert t.handle(pos(lat=51.49), now=1300) == []  # 64,8 kn t.o.v. herstelde positie
+
+
+# --- bereik per richting ------------------------------------------------------
+
+
+def test_sector_sample_after_a_speed_checked_position():
+    t = tracker()
+    assert of_type(t.handle(pos(lat=51.40, lon=3.60), now=86_400 + 10), SectorSample) == []
+    [sample] = of_type(t.handle(pos(lat=51.40, lon=3.601), now=86_400 + 40), SectorSample)
+    # Vanaf het station (51.44, 3.58) ligt dit punt op ~162°: sector 16 (160–170°).
+    assert (sample.day_ts, sample.sector, sample.mmsi) == (86_400, 16, MMSI)
+    assert sample.distance_m == pytest.approx(4_700, abs=100)
+
+
+def test_no_sector_sample_after_a_stale_position():
+    t = tracker()
+    t.handle(pos(), now=0)
+    assert of_type(t.handle(pos(), now=700), SectorSample) == []
+
+
+# --- doorvaartlijn --------------------------------------------------------------
+
+GATE = GateConfig(name="Test", lat1=51.46, lon1=3.64, lat2=51.38, lon2=3.64)
+
+
+def crossings(t, *points, sog=10.0):
+    """Voert posities (lat, lon) 30 s na elkaar in; geeft alle kruisingen."""
+    return [
+        crossing
+        for i, (lat, lon) in enumerate(points)
+        for crossing in of_type(t.handle(pos(lat=lat, lon=lon, sog=sog), now=30 * i), GateCrossing)
+    ]
+
+
+def test_crossing_west_to_east_goes_up_the_river():
+    assert crossings(tracker(gate=GATE), (51.42, 3.638), (51.42, 3.642)) == [
+        GateCrossing(30, MMSI, upstream=True)
+    ]
+
+
+def test_crossing_east_to_west_goes_down_the_river():
+    assert crossings(tracker(gate=GATE), (51.42, 3.642), (51.42, 3.638)) == [
+        GateCrossing(30, MMSI, upstream=False)
+    ]
+
+
+def test_position_exactly_on_the_line_counts_once():
+    t = tracker(gate=GATE)
+    assert len(crossings(t, (51.42, 3.638), (51.42, 3.640), (51.42, 3.642))) == 1
+
+
+def test_no_crossing_beyond_the_end_of_the_line():
+    assert crossings(tracker(gate=GATE), (51.36, 3.638), (51.36, 3.642)) == []
+
+
+def test_slow_or_unknown_speed_does_not_cross():
+    # Ankerliggers met GPS-ruis mogen de telling niet opdrijven.
+    assert crossings(tracker(gate=GATE), (51.42, 3.6399), (51.42, 3.6401), sog=0.3) == []
+    assert crossings(tracker(gate=GATE), (51.42, 3.638), (51.42, 3.642), sog=None) == []
+
+
+def test_no_crossing_after_a_stale_position():
+    t = tracker(gate=GATE)
+    t.handle(pos(lat=51.42, lon=3.638), now=0)
+    assert of_type(t.handle(pos(lat=51.42, lon=3.642), now=700), GateCrossing) == []
+
+
+def test_without_a_gate_nothing_is_counted():
+    assert crossings(tracker(), (51.42, 3.638), (51.42, 3.642)) == []
